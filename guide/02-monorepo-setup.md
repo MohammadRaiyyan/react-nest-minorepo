@@ -148,6 +148,33 @@ The rule: **validate all config at boot, and crash with a clear message if anyth
 2. Set `PORT=abc`. Same result.
 3. Restore both. The API starts normally.
 
+### What the experiments showed
+
+| Env | First version | Why |
+| --- | --- | --- |
+| `DATABASE_URL` missing | Refused to start ✓ | Required field |
+| `PORT=abc` | Refused to start ✓ | `Number("abc")` is `NaN` |
+| `DATABASE_URL=` (empty) | **Started** | An empty string is still a string |
+| `DATABASE_URL=banana` | **Started** | Any string passes `z.string()` |
+| `PORT` unset | Refused, with "received NaN" | `Number(undefined)` is `NaN`. Needed a default. |
+
+`z.string()` only proves the variable exists. An empty value is the most common real mistake: a CI variable defined but never filled in. Validate the **shape**: `z.url()`, and optionally restrict the protocol (`z.url({ protocol: /^postgres(ql)?$/ })`).
+
+Once config is validated, trust it. `PORT ?? 3000` in `main.ts` is dead code if the schema already has `.default(3000)`. Defaults live in one place, the schema.
+
+For a readable startup error, use `safeParse` and `z.prettifyError(result.error)` instead of letting the raw `ZodError` JSON print.
+
+### Importing with `.ts` extensions
+
+Node's ES modules need a file extension on relative imports. Compiled output is `.js`, so the NestJS default is to write `.js` in source even though the file on disk is `.ts`. That is confusing, so both apps import the real file name instead:
+
+```ts
+import { ProjectsService } from './projects.service.ts';
+```
+
+- **API:** `"rewriteRelativeImportExtensions": true` in `apps/api/tsconfig.json`. TypeScript rewrites `./x.ts` to `./x.js` when it compiles.
+- **Web:** `"allowImportingTsExtensions": true` in `apps/web/tsconfig.json`. Vite bundles the files, and TypeScript only type-checks (`noEmit`), so nothing needs rewriting.
+
 ## Lesson 2.6: Ownership in a multi-team repo
 
 A monorepo puts every team's code in one place, so ownership must be explicit.

@@ -1,8 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
-import { RootLayout } from "./routes/root-layout";
-import { HomePage, homeLoader } from "./routes/home";
+import { RootLayout } from "./routes/root-layout.tsx";
+import { HomePage, homeLoader } from "./routes/home.tsx";
 
 const router = createBrowserRouter([
   {

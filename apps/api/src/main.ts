@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module.js';
+import { AppModule } from './app.module.ts';
 import { ConfigService } from '@nestjs/config';
-import { Env } from './config/env.js';
+import { Env } from './config/env.ts';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -12,6 +12,6 @@ async function bootstrap() {
   // (closing DB connections, etc.) before exiting. Lesson 1.3 in one line.
   app.enableShutdownHooks();
   const PORT = app.get(ConfigService<Env,true>).get("PORT",{infer:true})
-  await app.listen(PORT ?? 3000);
+  await app.listen(PORT);
 }
 await bootstrap();

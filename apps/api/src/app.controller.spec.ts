@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { AppController } from './app.controller.js';
+import { AppController } from './app.controller.ts';
 
 describe('AppController', () => {
   it('reports ok on /health', async () => {

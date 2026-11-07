@@ -117,7 +117,15 @@ Deploy Teamboard to a local Kubernetes cluster with every piece running: SPA, AP
   - [x] 1.1 The life of one request
   - [x] 1.2 Statelessness and where state lives
   - [x] 1.3 How servers fail (read, exercise skipped)
-- [ ] Chapter 2: Monorepo and local setup ([notes](02-monorepo-setup.md))
+- [x] Chapter 2: Monorepo and local setup ([notes](02-monorepo-setup.md))
   - [x] 2.1 to 2.4 Monorepo, Turborepo, Docker Compose, one origin (scaffold built)
-  - [ ] 2.5 Config validation (exercise)
-  - [ ] 2.6 Ownership
+  - [x] 2.5 Config validation (exercise)
+  - [x] 2.6 Ownership (read)
+- [ ] Chapter 3: Production API design ([notes](03-api-design.md))
+  - [x] 3.1 Designing resources
+  - [x] 3.2 Feature modules (exercise: Tasks module)
+  - [x] 3.3 Validation with zod and a shared contracts package
+  - [x] 3.4 One error format
+  - [ ] 3.5 Pagination, filtering, sorting ← **resume here.** Open items: pipe must throw `ValidationException` and filter must put field errors in `errors` (3.4 leftovers). Then cursor pagination: `comparePosition` helper, `TasksRepository.list`, service builds `nextCursor`, controller drops its `{ data }` wrapper.
+  - [ ] 3.6 Idempotency keys
+  - [ ] 3.7 OpenAPI and versioning
