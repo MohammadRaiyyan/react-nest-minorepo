@@ -1,0 +1,29 @@
+# Local infrastructure only. The apps themselves run on your machine with `pnpm dev`.
+name: teamboard
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: teamboard
+      POSTGRES_PASSWORD: teamboard
+      POSTGRES_DB: teamboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teamboard"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:8
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
