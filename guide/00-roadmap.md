@@ -126,6 +126,6 @@ Deploy Teamboard to a local Kubernetes cluster with every piece running: SPA, AP
   - [x] 3.2 Feature modules (exercise: Tasks module)
   - [x] 3.3 Validation with zod and a shared contracts package
   - [x] 3.4 One error format
-  - [ ] 3.5 Pagination, filtering, sorting ← **resume here.** Open items: pipe must throw `ValidationException` and filter must put field errors in `errors` (3.4 leftovers). Then cursor pagination: `comparePosition` helper, `TasksRepository.list`, service builds `nextCursor`, controller drops its `{ data }` wrapper.
-  - [ ] 3.6 Idempotency keys
-  - [ ] 3.7 OpenAPI and versioning
+  - [x] 3.5 Pagination, filtering, sorting
+  - [x] 3.6 Idempotency keys
+  - [ ] 3.7 OpenAPI and versioning ← **resume here**

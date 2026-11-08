@@ -431,6 +431,153 @@ for i in $(seq 1 25); do curl -s -X POST localhost:3000/api/projects/$P/tasks \
 3. Send `?cursor=garbage`. Expect `400`.
 4. Send `?limit=500`. Expect `400`.
 
+### What the build showed
+
+**One compare function, used twice.** `comparePosition(a, b)` decides the order (`createdAt`, then `id`). The repository uses it to sort and to keep only rows after the cursor. Because both use the same function, pages can never overlap or leave gaps. Tests in `common/cursor.spec.ts` and `tasks/tasks.repository.spec.ts` prove it: removing the `id` tie-breaker makes "pages through everything exactly once" fail.
+
+**A precedence trap.** The first version was one expression:
+
+```ts
+timeDiff || a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+```
+
+`? :` binds looser than `||`, so JavaScript read it as `(timeDiff || a.id < b.id) ? -1 : …` and returned `-1` whenever the times differed, even when `a` was later. Two statements, one per rule, fixed it and read better.
+
+**Narrow first, limit last.** The first `list` took `limit + 1` rows and then filtered by status. With 7 `todo` tasks followed by 3 `done`, `?status=done&limit=2` returned an empty page and `nextCursor: null`, telling the client there were no done tasks. Every narrowing step (project, status, cursor) runs before the limit. SQL works the same way: `WHERE` before `LIMIT`.
+
+**Over HTTP, 25 tasks, `limit=10`:**
+
+```
+page 1: 10 tasks (Task 1 .. Task 10),  nextCursor=yes
+page 2: 10 tasks (Task 11 .. Task 20), nextCursor=yes
+page 3:  5 tasks (Task 21 .. Task 25), nextCursor=null
+total 25, unique 25
+?cursor=garbage → 400 BAD_REQUEST "Invalid cursor"
+?limit=500      → 400 VALIDATION_FAILED
+?limit=0        → 400 VALIDATION_FAILED
+?limit=2.5      → 200   (needs .int() in the schema)
+```
+
+**Query strings are always strings.** Replacing `z.coerce.number().int()` with `z.int()` broke every request with a limit: `?limit=10` arrives as the string `"10"`, and `z.int()` rejects strings. Only the default (no `limit` at all) still worked, so the bug hid from a quick test. Body JSON keeps numbers as numbers. Query strings, path params, and headers never do, so their schemas need `z.coerce`.
+
+## Lesson 3.6: Idempotency keys
+
+### The problem
+
+An operation is **idempotent** when doing it twice has the same effect as doing it once.
+
+| Method | Idempotent? | Twice means |
+| --- | --- | --- |
+| `GET` | Yes | Read twice, nothing changes |
+| `PUT` | Yes | Same full replacement twice |
+| `DELETE` | Yes | Deleted once; the second call finds nothing |
+| `PATCH` | Usually | `status: "done"` twice is the same. `count += 1` twice is not. |
+| `POST` | **No** | **Two resources created** |
+
+`POST` gets sent twice more often than you think:
+
+```
+Client ──POST──> Server: task created ✓
+Client <──201─── ✗ network drops the response
+Client ──POST──> Server: task created again ✗ (the client retried)
+```
+
+Double-clicks, mobile networks, load balancer timeouts, and automatic retries all cause it. For tasks it is a nuisance. For payments it charges a customer twice.
+
+### The fix: Idempotency-Key
+
+1. The client generates a unique ID per *user action* (`crypto.randomUUID()`) and sends it as a header: `Idempotency-Key: 7f3c…`. A retry of the same action sends the same key.
+2. The first time the server sees a key, it does the work and stores **key → response**.
+3. When the same key arrives again, the server skips the work and returns the stored response.
+
+```
+POST + key 7f3c ──> new key:   create the task, store the response ──> 201 {task}
+POST + key 7f3c ──> known key: return the stored response          ──> 201 {same task}
+```
+
+Stripe, PayPal, and most payment APIs work this way.
+
+### Edge cases a real implementation handles
+
+| Situation | Response |
+| --- | --- |
+| Same key, same body, first request finished | Replay the stored response |
+| Same key, **different body** | `422`: the client reused a key for a different action, a client bug |
+| Same key while the first request is **still running** | `409`: try again shortly |
+| First request **failed** | Forget the key, so a retry can succeed |
+| Key older than 24 hours | Expired and forgotten (Redis TTL, Chapter 11) |
+
+Keys are scoped by route (and by user, from Chapter 6), so two users can never collide.
+
+### Interceptors
+
+A NestJS **interceptor** wraps the route handler. It runs code *before* the handler and *after* it, and it can skip the handler entirely.
+
+```
+request ──> Interceptor (before) ──> Controller ──> Interceptor (after) ──> response
+```
+
+```
+request ──> Interceptor: "seen this key" ──> stored response   (controller never runs)
+```
+
+The handler's result arrives as an **Observable**, from the RxJS library. For an HTTP request, it behaves like a Promise that emits one value. Two operators cover almost everything:
+
+- `tap(fn)`: look at the value without changing it (store the response).
+- `catchError(fn)`: react to an error (forget the key), then rethrow it.
+
+`of(value)` creates an Observable that emits `value` immediately. Returning `of(stored)` from an interceptor sends `stored` as the response without running the controller.
+
+### Exercise, step 1: feel the interceptor
+
+Create `apps/api/src/common/idempotency.interceptor.ts`:
+
+```ts
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import type { Request } from 'express';
+import { Observable, tap } from 'rxjs';
+
+@Injectable()
+export class IdempotencyInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const req = context.switchToHttp().getRequest<Request>();
+    console.log('BEFORE', req.method, req.url, req.headers['idempotency-key']);
+
+    return next.handle().pipe(
+      tap((body) => console.log('AFTER', body)),
+    );
+  }
+}
+```
+
+Put `@UseInterceptors(IdempotencyInterceptor)` on the create-task route. Create a task with an `Idempotency-Key` header and watch the server log.
+
+Then replace the `return` with `return of({ fake: true });` (import `of` from `rxjs`). Create a task again, then list tasks. The client got `{ fake: true }`, and no task was created: the controller never ran. That is how a replay works. Undo it afterwards.
+
+### What the build showed
+
+The finished interceptor, in order:
+
+1. No `Idempotency-Key` header: run the handler normally.
+2. Scope the key with method and URL. Hash the body with `sha256`.
+3. Known key: different hash → `422`; still running → `409`; done → set `Idempotent-Replayed: true` and `return of(savedResponse)`. The controller never runs.
+4. New key: `start()`, run the handler, `tap` → `finish()`, `catchError` → `forget()` and rethrow.
+
+Over HTTP, two requests sent at the same moment with the same key: one `201` that created the task, one `201` with `Idempotent-Replayed: true`. One task in the list. A third request with the same key and a different title: `422 UNPROCESSABLE_ENTITY`.
+
+Mistakes made on the way, each worth remembering:
+
+- **Encoding is not hashing.** Base64 is reversible and grows with the input. A hash (`sha256`) is a fixed-size fingerprint, made for "are these two the same?".
+- **`throwError()` alone does nothing.** It only creates an Observable. Outside a `pipe`, use a plain `throw`. Inside `catchError`, `return throwError(() => err)`.
+- **`catchError` must return an Observable.** Returning nothing crashed RxJS (a `500` replaced the real `400`). An `async` callback returns a Promise, which RxJS treats as success, silently swallowing the error.
+- **Without an early return for "no key", every keyless request shares one entry** (`"undefined"`), and one user would receive another user's response.
+
+### Why this version is not production-ready yet
+
+- **Check-then-set.** `get()` then `start()` is safe here only because nothing `await`s between them, and Node runs one thing at a time. With Redis, both calls are network round trips, and two requests can both see "no record". The fix is one atomic operation, `SET key value NX` ("set only if missing"), covered with race conditions in Chapter 5 and Redis in Chapter 11.
+- **Memory store.** Lost on restart and not shared between API copies (Chapter 1). Redis fixes both and adds a 24-hour expiry.
+- **Scope by user** once auth exists (Chapter 6), so two users can never share a key.
+
 ## My notes
 
 _Write in your own words: what each layer owns, and why lists are wrapped._

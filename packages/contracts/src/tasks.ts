@@ -12,7 +12,7 @@ export const updateTaskSchema = z.object({
 })
 export const listTasksQuerySchema = z.object({
     status:taskStatusSchema.optional(),
-    limit: z.coerce.number().min(1).max(100).default(20),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
     cursor:z.string().optional()
 })
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;

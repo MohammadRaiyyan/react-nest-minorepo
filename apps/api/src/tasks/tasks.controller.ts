@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import { TasksService } from './tasks.service.ts';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.ts';
@@ -20,6 +21,7 @@ import {
   type UpdateTaskInput,
   updateTaskSchema,
 } from '@teamboard/contracts';
+import { IdempotencyInterceptor } from '../common/idempotency.interceptor.ts';
 
 @Controller()
 export class TasksController {
@@ -31,10 +33,11 @@ export class TasksController {
     @Query(new ZodValidationPipe(listTasksQuerySchema))
     query: ListTasksQueryInput,
   ) {
-    return { data: this.taskService.getAll(projectId, query) };
+    return this.taskService.getAll(projectId, query);
   }
 
   @Post('projects/:projectId/tasks')
+  @UseInterceptors(IdempotencyInterceptor)
   create(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body(new ZodValidationPipe(createTaskSchema)) task: CreateTaskInput,
