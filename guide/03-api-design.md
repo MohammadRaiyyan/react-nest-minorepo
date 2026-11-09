@@ -578,6 +578,170 @@ Mistakes made on the way, each worth remembering:
 - **Memory store.** Lost on restart and not shared between API copies (Chapter 1). Redis fixes both and adds a 24-hour expiry.
 - **Scope by user** once auth exists (Chapter 6), so two users can never share a key.
 
+## Lesson 3.7: Versioning and OpenAPI
+
+### Breaking vs non-breaking changes
+
+An API change is **breaking** when a client that worked yesterday fails today without changing its code.
+
+| Change | Breaking? |
+| --- | --- |
+| Add a new endpoint | No |
+| Add an optional field to a request | No |
+| Add a field to a response | No (clients ignore unknown fields) |
+| Remove or rename a response field | **Yes** |
+| Change a field's type (`"5"` → `5`) | **Yes** |
+| Make an optional request field required | **Yes** |
+| Change a status code or an error `code` | **Yes** |
+| Tighten validation (max 200 → max 100 chars) | **Yes** |
+
+The best versioning strategy is to **not need a new version**: make additive changes, and keep old fields working while clients move.
+
+### Even your own SPA is an "old client"
+
+The React app and the API deploy separately. During a deploy, and for hours after, users still have the old JavaScript bundle open in their tabs, calling the new API. A breaking API change breaks every open tab. So even with one team and one frontend, the API must stay compatible for a window.
+
+### When you must break: versions
+
+| Strategy | Example | Used by |
+| --- | --- | --- |
+| **URI** | `/api/v1/tasks`, `/api/v2/tasks` | Most public APIs. Visible, easy to route and cache. |
+| Header | `Accept: application/vnd.teamboard.v2+json` | Some enterprise APIs |
+| Date-based | `Stripe-Version: 2026-10-01` | Stripe |
+
+Teamboard uses URI versioning. NestJS supports it directly:
+
+```ts
+app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+```
+
+Every route becomes `/api/v1/...`. A controller or route can opt into another version with `@Version('2')`, so v1 and v2 handlers live side by side. Routes that are not part of the product API, like `/health`, use `@Version(VERSION_NEUTRAL)` and stay at `/api/health`.
+
+Retiring an old version: announce it, add `Deprecation` and `Sunset` response headers with the shutdown date, watch the logs until traffic on it reaches zero, then remove it.
+
+### One place that configures the app
+
+`main.ts` calls `setGlobalPrefix('api')`. Each e2e test calls it again on its own. Add versioning to `main.ts` only, and the tests silently test a different app than production. Put all app-level setup in one function that both use:
+
+```ts
+// src/configure-app.ts
+export function configureApp(app: INestApplication) { /* prefix, versioning, shutdown hooks */ }
+```
+
+### Exercise, step 1: versioning
+
+1. Create `apps/api/src/configure-app.ts` exporting `configureApp(app)`. Move the global prefix and shutdown hooks there, and add URI versioning with default version `'1'`.
+2. Call it from `main.ts` and from `beforeEach` in both e2e test files, instead of `setGlobalPrefix`.
+3. Make `/health` version-neutral with `@Version(VERSION_NEUTRAL)` on the route.
+4. Update the e2e test URLs to `/api/v1/...` (the health test stays `/api/health`).
+
+**Check**
+
+```sh
+pnpm --filter @teamboard/api test:e2e        # all pass
+curl localhost:3000/api/health                # 200
+curl localhost:3000/api/v1/projects           # 200
+curl localhost:3000/api/projects              # 404
+```
+
+### What step 1 showed
+
+```
+/api/health       200   (VERSION_NEUTRAL)
+/api/v1/health    404
+/api/v1/projects  200
+/api/projects     404   (no unversioned routes any more)
+```
+
+`configureApp(app)` is now the only place that sets the prefix, versioning, and shutdown hooks. `main.ts` and every e2e test call it, so tests run the same app as production.
+
+### OpenAPI
+
+**OpenAPI** (formerly called Swagger) is a standard, machine-readable description of an HTTP API: every path, method, parameter, request body, response, and error, as one JSON or YAML document. From that one file, tools generate:
+
+- **Interactive docs** (Swagger UI, Scalar): every endpoint, with a "try it" button.
+- **Typed clients** for any language: a mobile team in Kotlin or Swift, a partner in Python.
+- **Mock servers**, so a frontend team can start before the backend is done.
+- **Contract tests** that fail when the API stops matching its description.
+
+Two ways to produce it:
+
+| Approach | How | Risk |
+| --- | --- | --- |
+| **Code-first** | Generate the document from code (decorators or schemas) | Docs only as good as the annotations |
+| **Spec-first** | Write the YAML by hand first, generate code from it | Spec and code drift unless generation is enforced |
+
+Teamboard is code-first, from the zod schemas in `@teamboard/contracts`. The `zod-openapi` library turns them into an OpenAPI 3.1 document, so validation, TypeScript types, and docs all come from one source.
+
+### The wire format is not the entity
+
+The API's `Task` has `createdAt: Date`. On the wire it is JSON, and JSON has no dates: the client receives a string like `"2026-11-09T10:00:00.000Z"`. The response schema in the contract describes what the client actually receives: `createdAt: z.iso.datetime()`, a string. This is the third shape of a task, next to the entity and the input DTOs.
+
+### Exercise, step 2: describe and serve the API
+
+Install:
+
+```sh
+pnpm --filter @teamboard/contracts add zod-openapi@6.0.2
+pnpm --filter @teamboard/api add @nestjs/swagger@12.1.1
+```
+
+**2a. Response schemas** in `packages/contracts`:
+
+- `taskSchema`: every field a client receives. Dates as `z.iso.datetime()`. Add `.meta({ id: 'Task' })` so it becomes a named, reusable component in the document.
+- `taskPageSchema`: `{ data: Task[], nextCursor: string | null }`, id `TaskPage`.
+- `problemSchema` in a new `problem.ts`: `type`, `title`, `status`, `detail`, `code`, and optional `errors` (`z.record(z.string(), z.array(z.string()))`), id `Problem`.
+
+**2b. The document** in `packages/contracts/src/openapi.ts`: call `createDocument` from `zod-openapi` and export the result as `openApiDocument`.
+
+- `openapi: '3.1.0'`, an `info` with title and version, and `servers: [{ url: '/api/v1' }]`.
+- `paths` for the five task routes. OpenAPI writes path params as `{projectId}`, not `:projectId`.
+- For each operation: `requestParams` (`path`, `query`, and for POST the `header` `idempotency-key`), `requestBody` where there is one, and `responses` with the success response plus the errors it can return (`400`, `404`, `409`, `422`) as `application/problem+json` with `problemSchema`.
+- Export it from `index.ts`.
+
+**2c. Serve it.** In `configureApp`, call `SwaggerModule.setup('api/docs', app, openApiDocument)` from `@nestjs/swagger`.
+
+**Check**
+
+- Open `http://localhost:3000/api/docs`. Every task route is listed with its schemas.
+- Use "Try it out" on `GET /projects/{projectId}/tasks` with a real project ID.
+- `curl localhost:3000/api/docs-json` returns the raw document. This file is what a mobile team or a client generator would use.
+
+### What step 2 built
+
+- `packages/contracts/src/problem.ts`: `problemSchema`, the error shape.
+- `projectSchema`, `projectListSchema`, `taskSchema`, `taskPageSchema`: response shapes, dates as ISO strings.
+- `packages/contracts/src/openapi.ts`: `openApiDocument`, built with `createDocument` from `zod-openapi`. All 10 routes, their params, bodies, success responses, and `application/problem+json` errors.
+- `configureApp` serves the raw document at `/api/docs-json` and interactive docs at `/api/docs`.
+
+The generated document (OpenAPI 3.1) has 5 named components (`Project`, `ProjectList`, `Task`, `TaskPage`, `Problem`), and the list route's `limit`, `status`, and `cursor` query params come straight from `listTasksQuerySchema`.
+
+**Why Scalar and not `@nestjs/swagger`.** `@nestjs/swagger` builds documents from decorators on DTO classes, and its TypeScript types for a document did not match the ones `zod-openapi` produces (`paths` optional vs required, and deeper differences). Making it compile would have meant casting with `as unknown as`, which tells the compiler to stop checking. Scalar takes the document as plain content, so nothing is forced. Swagger UI and Scalar are both just viewers: they render the same OpenAPI JSON. "Swagger" is also still the common name people use for OpenAPI itself.
+
+**What can still drift.** The route table in `openapi.ts` is written by hand. If someone adds a route to a controller and forgets the document, nothing fails. A contract test that compares Nest's registered routes with the document's `paths` closes that gap (Chapter 9).
+
+## Chapter 3 production checklist
+
+- Resources are nouns, methods are verbs, nesting is one level at most.
+- Lists are wrapped (`{ data, nextCursor }`), have a default limit and a maximum, and use cursor pagination with a unique tie-breaker.
+- Controllers only translate HTTP. Services hold rules. Repositories hold storage.
+- Every input (body, query, params, headers) is parsed by a schema at the edge. Unknown fields are stripped or rejected.
+- Entities, input DTOs, and response schemas are three separate types.
+- Every error is `application/problem+json` with a stable `code`. Unexpected errors return a generic `500` and are logged in full on the server.
+- `POST` endpoints that create things accept an `Idempotency-Key`.
+- Routes are versioned (`/api/v1`). Changes are additive. A breaking change gets a new version and a deprecation period.
+- The API has an OpenAPI document generated from the same schemas it validates with.
+
+## Chapter 3 common mistakes
+
+- Spreading a request body into stored data (mass assignment).
+- Checking "is it truthy?" instead of "was it sent?" (`!== undefined`) in PATCH handlers.
+- Applying a limit before a filter.
+- Forgetting that query strings, params, and headers are always strings (`z.coerce`).
+- Returning raw errors or stack traces to clients.
+- Branching on error message text in the frontend instead of `code`.
+- Configuring the app in `main.ts` only, so tests run a different app.
+
 ## My notes
 
 _Write in your own words: what each layer owns, and why lists are wrapped._

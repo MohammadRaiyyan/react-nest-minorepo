@@ -3,6 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from './../src/app.module.ts';
+import { configureApp } from '../src/configure-app.ts';
 
 describe('Health (e2e)', () => {
   let app: INestApplication<App>;
@@ -12,7 +13,7 @@ describe('Health (e2e)', () => {
       imports: [AppModule],
     }).compile();
     app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api');
+    configureApp(app)
     await app.init();
   });
 

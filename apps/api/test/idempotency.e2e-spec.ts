@@ -3,22 +3,23 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.ts';
+import { configureApp } from '../src/configure-app.ts';
 
-describe('Idempotency-Key on POST /api/projects/:projectId/tasks (e2e)', () => {
+describe('Idempotency-Key on POST /api/v1/projects/:projectId/tasks (e2e)', () => {
   let app: INestApplication<App>;
   let tasksUrl: string;
 
   beforeEach(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api');
+    configureApp(app)
     await app.init();
 
     const project = await request(app.getHttpServer())
-      .post('/api/projects')
+      .post('/api/v1/projects')
       .send({ name: `Project ${crypto.randomUUID()}` })
       .expect(201);
-    tasksUrl = `/api/projects/${project.body.id}/tasks`;
+    tasksUrl = `/api/v1/projects/${project.body.id}/tasks`;
   });
 
   afterEach(async () => {

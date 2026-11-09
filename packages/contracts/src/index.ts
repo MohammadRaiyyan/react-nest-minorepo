@@ -3,3 +3,5 @@
 // type for both apps, and form validation in React.
 export * from './projects.ts';
 export * from './tasks.ts';
+export * from './problem.ts';
+export * from './openapi.ts';

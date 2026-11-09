@@ -121,11 +121,12 @@ Deploy Teamboard to a local Kubernetes cluster with every piece running: SPA, AP
   - [x] 2.1 to 2.4 Monorepo, Turborepo, Docker Compose, one origin (scaffold built)
   - [x] 2.5 Config validation (exercise)
   - [x] 2.6 Ownership (read)
-- [ ] Chapter 3: Production API design ([notes](03-api-design.md))
+- [x] Chapter 3: Production API design ([notes](03-api-design.md))
   - [x] 3.1 Designing resources
   - [x] 3.2 Feature modules (exercise: Tasks module)
   - [x] 3.3 Validation with zod and a shared contracts package
   - [x] 3.4 One error format
   - [x] 3.5 Pagination, filtering, sorting
   - [x] 3.6 Idempotency keys
-  - [ ] 3.7 OpenAPI and versioning ← **resume here**
+  - [x] 3.7 OpenAPI and versioning
+- [ ] Chapter 4: Database and ORM ← **resume here**
