@@ -129,4 +129,11 @@ Deploy Teamboard to a local Kubernetes cluster with every piece running: SPA, AP
   - [x] 3.5 Pagination, filtering, sorting
   - [x] 3.6 Idempotency keys
   - [x] 3.7 OpenAPI and versioning
-- [ ] Chapter 4: Database and ORM ← **resume here**
+- [ ] Chapter 4: Database and ORM ([notes](04-database-orm.md))
+  - [x] 4.1 Tables and constraints (SQL by hand)
+  - [x] 4.2 Prisma setup and the schema
+  - [x] 4.3 Migrations in a team
+  - [ ] 4.4 Repositories on Prisma ← **resume here**
+  - [ ] 4.5 Indexes and query plans
+  - [ ] 4.6 N+1 queries
+  - [ ] 4.7 Transactions

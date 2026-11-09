@@ -1,41 +1,43 @@
-import { Injectable } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import { Project } from './project.ts';
+import { Inject, Injectable } from '@nestjs/common';
+import { PRISMA } from '../database/database.module.ts';
+import { PrismaClient, type Project } from '@teamboard/db';
 
-// Storage only: no business rules, no HTTP. In memory for now, which breaks
-// with two copies or a restart (Chapter 1). Chapter 4 swaps this for Prisma
-// without touching the service or controller.
+
 @Injectable()
 export class ProjectsRepository {
-  private readonly projects = new Map<string, Project>();
+  constructor(@Inject(PRISMA) private readonly prisma: PrismaClient) {}
 
-  findAll(): Project[] {
-    return [...this.projects.values()];
+  async findAll(): Promise<Project[]> {
+    return await this.prisma.project.findMany({
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
-  findById(id: string): Project | undefined {
-    return this.projects.get(id);
+  async findById(id: string): Promise<Project | null> {
+    return await this.prisma.project.findUnique({ where: { id } });
   }
 
-  findByName(name: string): Project | undefined {
-    return [...this.projects.values()].find((p) => p.name === name);
+  async findByName(name: string): Promise<Project | null> {
+    return await this.prisma.project.findUnique({ where: { name } });
   }
 
-  create(input: { name: string; description: string | null }): Project {
-    const now = new Date();
-    const project: Project = { id: randomUUID(), ...input, createdAt: now, updatedAt: now };
-    this.projects.set(project.id, project);
-    return project;
+  async create(input: {
+    name: string;
+    description: string | null;
+  }): Promise<Project> {
+    return await this.prisma.project.create({
+      data: { name: input.name, description: input.description },
+    });
   }
 
-  update(id: string, changes: Partial<Pick<Project, 'name' | 'description'>>): Project {
-    const existing = this.projects.get(id)!;
-    const updated: Project = { ...existing, ...changes, updatedAt: new Date() };
-    this.projects.set(id, updated);
-    return updated;
+  async update(
+    id: string,
+    changes: Partial<Pick<Project, 'name' | 'description'>>,
+  ): Promise<Project> {
+    return await this.prisma.project.update({ where: { id }, data: changes });
   }
 
-  delete(id: string): void {
-    this.projects.delete(id);
+  async delete(id: string): Promise<void> {
+    await this.prisma.project.delete({ where: { id } });
   }
 }

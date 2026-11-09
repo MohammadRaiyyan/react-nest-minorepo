@@ -175,6 +175,14 @@ import { ProjectsService } from './projects.service.ts';
 - **API:** `"rewriteRelativeImportExtensions": true` in `apps/api/tsconfig.json`. TypeScript rewrites `./x.ts` to `./x.js` when it compiles.
 - **Web:** `"allowImportingTsExtensions": true` in `apps/web/tsconfig.json`. Vite bundles the files, and TypeScript only type-checks (`noEmit`), so nothing needs rewriting.
 
+### Linting: one config for the whole repo
+
+Oxlint runs from one `.oxlintrc.json` at the repo root, so every package and the editor use the same rules. `"options": { "typeAware": true }` turns on rules that need TypeScript's type information, like `no-floating-promises` (an un-awaited Promise). Without it, those rules silently do nothing, in the CLI and in the editor.
+
+- `pnpm lint` runs every package's `lint` script through Turbo.
+- In VS Code, the **Oxc** extension (`oxc.oxc-vscode`, recommended in `.vscode/extensions.json`) shows errors while you type. It uses the `oxlint` binary installed at the repo root.
+- Generated code and build output are ignored (`ignorePatterns`).
+
 ## Lesson 2.6: Ownership in a multi-team repo
 
 A monorepo puts every team's code in one place, so ownership must be explicit.

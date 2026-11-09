@@ -1,0 +1,45 @@
+// The database schema for Teamboard. `pnpm --filter @teamboard/db db:migrate`
+// turns changes here into a SQL migration and applies it.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Lesson 4.2: write the Project and Task models here.
+model Project{
+  id String @id @default(uuid(7)) @db.Uuid
+  name String @unique
+  description String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tasks Task[]
+
+  @@map("projects")
+}
+
+model Task{
+  id String @id @default(uuid(7)) @db.Uuid
+  projectId String  @map("project_id") @db.Uuid
+  title String 
+  description String?
+  status TaskStatus  @default(todo)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId],references: [id],onDelete: Cascade)
+
+  @@map("tasks")
+}
+
+enum TaskStatus{
+  todo
+  in_progress
+  done
+}

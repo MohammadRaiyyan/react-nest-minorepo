@@ -20,8 +20,8 @@ export class TasksService {
     if (!task) throw new NotFoundException(`Task with the ${id} is not found`);
     return task;
   }
-  getAll(projectId: string, query: ListTasksQueryInput) {
-    this.projectsService.findOne(projectId);
+  async getAll(projectId: string, query: ListTasksQueryInput) {
+    await this.projectsService.findOne(projectId);
     const decoded = query.cursor ? decodeCursor(query.cursor) : undefined;
     const after = decoded && {
       createdAt: new Date(decoded.createdAt),
@@ -41,8 +41,8 @@ export class TasksService {
     return this.findOne(id);
   }
 
-  create(projectId: string, input: CreateTaskInput): Task {
-    this.projectsService.findOne(projectId);
+  async create(projectId: string, input: CreateTaskInput): Promise<Task> {
+    await this.projectsService.findOne(projectId);
     return this.tasksRepository.create(projectId, {
       title: input.title,
       description: input.description || null,

@@ -8,6 +8,7 @@ import { TasksModule } from './tasks/tasks.module.ts';
 import { APP_FILTER } from '@nestjs/core';
 import { ProblemDetailsFilter } from './common/problem-details.filter.ts';
 import { CommonModule } from './common/common.module.ts';
+import { DatabaseModule } from './database/database.module.ts';
 
 @Module({
   imports: [
@@ -24,7 +25,8 @@ import { CommonModule } from './common/common.module.ts';
     }),
     ProjectsModule,
     TasksModule,
-    CommonModule
+    CommonModule,
+    DatabaseModule
   ],
   controllers: [AppController],
   providers:[{provide:APP_FILTER,useClass:ProblemDetailsFilter}]
