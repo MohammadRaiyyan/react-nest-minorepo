@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { TasksRepository } from './tasks.repository.ts';
-import type { Task } from './task.ts';
 import { ProjectsService } from '../projects/projects.service.ts';
 import {
   CreateTaskInput,
@@ -8,6 +7,7 @@ import {
   UpdateTaskInput,
 } from '@teamboard/contracts';
 import { decodeCursor, encodeCursor } from '../common/cursor.ts';
+import { Task } from '@teamboard/db';
 
 @Injectable()
 export class TasksService {
@@ -15,8 +15,8 @@ export class TasksService {
     private readonly tasksRepository: TasksRepository,
     private readonly projectsService: ProjectsService,
   ) {}
-  private findOne(id: string) {
-    const task = this.tasksRepository.getById(id);
+  private async findOne(id: string) {
+    const task = await this.tasksRepository.getById(id);
     if (!task) throw new NotFoundException(`Task with the ${id} is not found`);
     return task;
   }
@@ -27,7 +27,7 @@ export class TasksService {
       createdAt: new Date(decoded.createdAt),
       id: decoded.id,
     };
-    const rows = this.tasksRepository.list(projectId, {
+    const rows = await this.tasksRepository.list(projectId, {
       status: query.status,
       limit: query.limit,
       after,
@@ -37,20 +37,20 @@ export class TasksService {
     const nextCursor = hasMore ? encodeCursor(data[data.length - 1]) : null;
     return { data, nextCursor };
   }
-  getById(id: string): Task | undefined {
-    return this.findOne(id);
+  async getById(id: string): Promise<Task> {
+    return await this.findOne(id);
   }
 
   async create(projectId: string, input: CreateTaskInput): Promise<Task> {
     await this.projectsService.findOne(projectId);
-    return this.tasksRepository.create(projectId, {
+    return await this.tasksRepository.create(projectId, {
       title: input.title,
       description: input.description || null,
     });
   }
 
-  update(id: string, input: UpdateTaskInput): Task {
-    this.findOne(id);
+  async update(id: string, input: UpdateTaskInput): Promise<Task> {
+    await this.findOne(id);
     const changes: Partial<Pick<Task, 'title' | 'description' | 'status'>> = {};
     if (input.title !== undefined) {
       changes.title = input.title;
@@ -61,12 +61,12 @@ export class TasksService {
     if (input.status !== undefined) {
       changes.status = input.status;
     }
-    return this.tasksRepository.update(id, changes);
+    return await this.tasksRepository.update(id, changes);
   }
 
-  delete(id: string): void {
-    this.findOne(id);
+  async delete(id: string): Promise<void> {
+    await this.findOne(id);
 
-    return this.tasksRepository.delete(id);
+    return await this.tasksRepository.delete(id);
   }
 }

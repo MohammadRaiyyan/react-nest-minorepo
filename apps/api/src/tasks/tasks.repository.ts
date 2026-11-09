@@ -1,57 +1,49 @@
-import { Injectable } from '@nestjs/common';
-import type { Task, TaskStatus } from './task.ts';
-import { comparePosition, Position } from '../common/cursor.ts';
+import { Inject, Injectable } from '@nestjs/common';
+import {  Position } from '../common/cursor.ts';
+import { PRISMA } from '../database/database.module.ts';
+import { PrismaClient, Task, TaskStatus } from '@teamboard/db';
 
 @Injectable()
 export class TasksRepository {
-  private readonly tasks = new Map<string, Task>();
-  list(
+  constructor(@Inject(PRISMA) private readonly prisma: PrismaClient) {}
+  async list(
     projectId: string,
     opts: { status?: TaskStatus; limit: number; after?: Position },
-  ): Task[] {
-    let tasks = [...this.tasks.values()]
-      .filter((task) => task.projectId === projectId)
-      .filter(t=> !opts.status || t.status === opts.status)
-      .sort(comparePosition)
-      .filter((t) => !opts.after || comparePosition(t, opts.after) > 0)
-      .slice(0, opts.limit + 1);
-
-    if (opts.status) {
-      tasks = tasks.filter((task) => task.status === opts.status);
-    }
-    return tasks;
+  ): Promise<Task[]> {
+    return await this.prisma.task.findMany({
+      where: {
+        projectId,
+        ...(opts.status && { status: opts.status }),
+        ...(opts.after && {
+          OR: [
+            { createdAt: { gt: opts.after.createdAt } },
+            { createdAt: opts.after.createdAt, id: { gt: opts.after.id } },
+          ],
+        }),
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: opts.limit + 1,
+    });
   }
-  getById(id: string): Task | undefined {
-    return this.tasks.get(id);
-  }
-
-  create(projectId: string, input: Pick<Task, 'title' | 'description'>): Task {
-    const id = crypto.randomUUID();
-    const now = new Date();
-    const task = {
-      id,
-      ...input,
-      projectId,
-      status: 'todo' as TaskStatus,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.tasks.set(id, task);
-    return task;
+  async getById(id: string): Promise<Task | null> {
+    return await this.prisma.task.findUnique({ where: { id } });
   }
 
-  update(
+  async create(
+    projectId: string,
+    input: Pick<Task, 'title' | 'description'>,
+  ): Promise<Task> {
+    return await this.prisma.task.create({ data: { ...input, projectId } });
+  }
+
+  async update(
     id: string,
     input: Partial<Pick<Task, 'title' | 'description' | 'status'>>,
-  ): Task {
-    let task = this.getById(id)!;
-    task = { ...task, ...input, updatedAt: new Date() };
-
-    this.tasks.set(id, task);
-    return task;
+  ): Promise<Task> {
+    return await this.prisma.task.update({ where: { id }, data: input });
   }
 
-  delete(id: string): void {
-    this.tasks.delete(id);
+  async delete(id: string): Promise<void> {
+    await this.prisma.task.delete({ where: { id } });
   }
 }

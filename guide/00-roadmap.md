@@ -133,7 +133,7 @@ Deploy Teamboard to a local Kubernetes cluster with every piece running: SPA, AP
   - [x] 4.1 Tables and constraints (SQL by hand)
   - [x] 4.2 Prisma setup and the schema
   - [x] 4.3 Migrations in a team
-  - [ ] 4.4 Repositories on Prisma ← **resume here**
-  - [ ] 4.5 Indexes and query plans
+  - [x] 4.4 Repositories on Prisma
+  - [ ] 4.5 Indexes and query plans ← **resume here**
   - [ ] 4.6 N+1 queries
   - [ ] 4.7 Transactions

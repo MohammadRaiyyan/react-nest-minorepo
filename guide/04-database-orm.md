@@ -423,6 +423,62 @@ IDs             → UUID v7 (01a1c00b-9132-758d-…: third group starts with 7)
 
 The `no-floating-promises` lint rule had flagged all six missing `await`s. Run `lint` with `typecheck` after every change, and let CI block merges on lint errors.
 
+### Step 3: TasksRepository on Prisma
+
+**A safety net first.** `test/tasks-pagination.e2e-spec.ts` checks pagination through HTTP: 25 tasks created concurrently (so some share a millisecond), paged 10 at a time, every task exactly once; the status filter before the limit; a garbage cursor → `400`. It passes on the in-memory repository today. It must still pass after the switch. Tests that check behavior, not implementation, are what make a rewrite safe.
+
+**The cursor rule moves into SQL.** In memory, `comparePosition` decided "does this task come after the cursor?". In the database, the same rule becomes a `WHERE` clause:
+
+```
+task comes after cursor  ⇔  task.createdAt > cursor.createdAt
+                            OR (task.createdAt = cursor.createdAt AND task.id > cursor.id)
+```
+
+In Prisma:
+
+```ts
+where: {
+  projectId,
+  ...(status && { status }),
+  ...(after && {
+    OR: [
+      { createdAt: { gt: after.createdAt } },
+      { createdAt: after.createdAt, id: { gt: after.id } },
+    ],
+  }),
+},
+orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+take: limit + 1,
+```
+
+The database now filters, sorts, and limits. Only `limit + 1` rows travel to the API, instead of every task in the table. The order of operations from Lesson 3.5 holds by construction: SQL applies `WHERE` before `LIMIT`.
+
+**Why not Prisma's built-in `cursor` option?** `findMany({ cursor: { id }, skip: 1 })` looks up the cursor row by ID to find its position. If that task was deleted between two page requests, the lookup fails. The `WHERE` version only needs the values inside the cursor, so it keeps working.
+
+**Why `Timestamptz(3)` matters here.** JavaScript dates have millisecond precision. Postgres defaults to microseconds. With microsecond columns, a cursor built from a JS `Date` loses the last three digits, and `createdAt > cursor.createdAt` would return rows the client already saw. `(3)` keeps the database and the cursor at the same precision.
+
+### Exercise, step 3
+
+1. Rewrite `TasksRepository` on Prisma, like `ProjectsRepository`: `list` with the query above, plus `getById`, `create`, `update`, `delete`. All `async`.
+2. `create` no longer sets `id`, `status`, or timestamps. The database and Prisma do.
+3. Add `async`/`await` up through `TasksService`. Delete `tasks/task.ts` and use `Task` and `TaskStatus` from `@teamboard/db`.
+4. Delete `src/tasks/tasks.repository.spec.ts`: it tested the in-memory implementation, and the e2e test now covers that behavior through HTTP.
+5. `comparePosition` in `common/cursor.ts` is no longer used by the app. Delete it and its tests, or keep it if something still uses it. Lint and typecheck will tell you.
+
+**Check**
+
+```sh
+pnpm --filter @teamboard/api lint
+pnpm --filter @teamboard/api typecheck
+pnpm --filter @teamboard/api test:e2e      # 8 passed, as before the rewrite
+```
+
+### What step 3 showed
+
+The pagination e2e test passed before the rewrite (in memory) and after it (Prisma): 8 of 8, unchanged. The implementation changed completely; the behavior did not. The dead in-memory pieces (`tasks.repository.spec.ts`, `comparePosition`) were deleted once nothing used them.
+
+The e2e tests leave rows in the dev database on every run. Chapter 9 gives tests their own database, reset between runs.
+
 ## My notes
 
 _Write in your own words: why the database checks rules the app already checks._

@@ -27,10 +27,3 @@ export function decodeCursor(cursor: string): Cursor {
   }
 }
 
-export function comparePosition(a: Position, b: Position) {
-  const byTime = a.createdAt.getTime() - b.createdAt.getTime();
-  if (byTime !== 0) {
-    return byTime;
-  }
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}

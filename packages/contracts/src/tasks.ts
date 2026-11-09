@@ -33,3 +33,4 @@ export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
 export type ListTasksQueryInput = z.infer<typeof listTasksQuerySchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type Task = z.infer<typeof taskSchema>
