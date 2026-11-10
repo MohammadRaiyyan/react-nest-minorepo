@@ -131,11 +131,18 @@ Teamboard live on a managed platform: SPA, API, and worker deployed from GitHub 
   - [x] 3.5 Pagination, filtering, sorting
   - [x] 3.6 Idempotency keys
   - [x] 3.7 OpenAPI and versioning
-- [ ] Chapter 4: Database and ORM ([notes](04-database-orm.md))
+- [x] Chapter 4: Database and ORM ([notes](04-database-orm.md))
   - [x] 4.1 Tables and constraints (SQL by hand)
   - [x] 4.2 Prisma setup and the schema
   - [x] 4.3 Migrations in a team
   - [x] 4.4 Repositories on Prisma
   - [x] 4.5 Indexes and query plans
   - [x] 4.6 N+1 queries (read, exercise skipped)
-  - [ ] 4.7 Transactions ← **resume here**
+  - [x] 4.7 Transactions (read, exercise skipped)
+- [ ] Chapter 5: Concurrency, race conditions, and locking ([notes](05-concurrency.md))
+  - [x] 5.1 One thread, many requests: where interleaving happens
+  - [ ] 5.2 Lost updates and atomic updates ← **resume here**
+  - [ ] 5.3 Isolation levels
+  - [ ] 5.4 Pessimistic locking (`SELECT … FOR UPDATE`)
+  - [ ] 5.5 Optimistic locking (version columns)
+  - [ ] 5.6 Distributed locks in Redis

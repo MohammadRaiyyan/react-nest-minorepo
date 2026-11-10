@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ValidationException } from './validation.exception.ts';
 import { STATUS_CODES } from 'http';
+import { isUniqueViolation } from './prisma-errors.ts';
 @Catch()
 export class ProblemDetailsFilter implements ExceptionFilter {
   private readonly logger = new Logger(ProblemDetailsFilter.name);
@@ -31,6 +32,12 @@ export class ProblemDetailsFilter implements ExceptionFilter {
         status: exception.getStatus(),
         code: codeFor(exception.getStatus()),
         detail: exception.message,
+      };
+    } else if (isUniqueViolation(exception)) {
+      error = {
+        status: 409,
+        code: 'CONFLICT',
+        detail: 'The request conflicts with an existing resource.',
       };
     } else {
       this.logger.error(

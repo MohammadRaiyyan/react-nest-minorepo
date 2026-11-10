@@ -26,7 +26,8 @@ export class ProjectsController {
 
   @Get()
   async list() {
-    return { data: await this.projects.findAll() };
+    const data = await  this.projects.findAll()
+    return { data };
   }
 
   @Get(':id')

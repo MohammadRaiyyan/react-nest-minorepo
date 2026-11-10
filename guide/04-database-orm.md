@@ -802,6 +802,8 @@ async create(input: …, db: Db = this.prisma): Promise<Project> {
 
 ### Exercise
 
+> **Status:** read; exercise skipped. The checker stays in the repo behind `describe.skip`. Remove `.skip` to use it.
+
 The checker is `apps/api/test/projects-with-tasks.e2e-spec.ts`. It sends one valid task and one with a NUL character (`\u0000`). zod accepts that string, but Postgres `text` columns reject it, so the second `INSERT` fails after the first succeeded: a real mid-way failure, with no fake `throw`. (Chapter 8 rejects such input at the boundary. Here it is a convenient way to make the database fail.)
 
 **Step 1: transactions by hand (psql).** Open two terminals with `docker compose exec postgres psql -U teamboard teamboard`.

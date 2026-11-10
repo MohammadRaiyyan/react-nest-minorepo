@@ -7,7 +7,8 @@ import { configureApp } from '../src/configure-app.ts';
 
 // Lesson 4.7 checker. POST /projects accepts optional starter tasks, and the
 // project and its tasks are saved together or not at all.
-describe('POST /api/v1/projects with starter tasks (e2e)', () => {
+// Skipped: the 4.7 exercise was skipped. Remove .skip to use it as a checker.
+describe.skip('POST /api/v1/projects with starter tasks (e2e)', () => {
   let app: INestApplication<App>;
 
   beforeAll(async () => {
