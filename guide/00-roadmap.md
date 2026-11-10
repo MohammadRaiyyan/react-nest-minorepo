@@ -136,6 +136,6 @@ Teamboard live on a managed platform: SPA, API, and worker deployed from GitHub 
   - [x] 4.2 Prisma setup and the schema
   - [x] 4.3 Migrations in a team
   - [x] 4.4 Repositories on Prisma
-  - [ ] 4.5 Indexes and query plans ← **resume here**
-  - [ ] 4.6 N+1 queries
-  - [ ] 4.7 Transactions
+  - [x] 4.5 Indexes and query plans
+  - [x] 4.6 N+1 queries (read, exercise skipped)
+  - [ ] 4.7 Transactions ← **resume here**

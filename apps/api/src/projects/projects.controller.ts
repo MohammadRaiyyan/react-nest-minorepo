@@ -25,8 +25,8 @@ export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
   @Get()
-  list() {
-    return { data: this.projects.findAll() };
+  async list() {
+    return { data: await this.projects.findAll() };
   }
 
   @Get(':id')

@@ -569,6 +569,307 @@ With the plain `OR`, Postgres sometimes reads every row of the project from the 
 
 In production, a plain `CREATE INDEX` blocks writes to the table while it builds. On a large live table, use `CREATE INDEX CONCURRENTLY` in its own hand-edited migration (Lesson 4.3).
 
+### What 4.5 showed
+
+`@@index([projectId, createdAt, id])` generated exactly one line of SQL:
+
+```sql
+CREATE INDEX "tasks_project_id_created_at_id_idx" ON "tasks"("project_id", "created_at", "id");
+```
+
+**A helper condition must be ANDed, never ORed.** The first attempt put `createdAt >= c` *inside* the `OR`. `A OR B OR C`, where `A` (`>=`) already covers `B` and `C`, is simply `A`. The query stopped excluding the cursor row, so every next page would start with the last row of the previous page. A condition added to help the index must narrow the result set (`AND`) and leave the result unchanged. Moved next to `projectId` (an `AND` in Prisma's `where`), it does that.
+
+Measured with Prisma's query shape (200,000 tasks, page after row 100 of one project):
+
+| `WHERE` | Index Cond | Rows Removed by Filter | Time |
+| --- | --- | --- | --- |
+| `OR` only | `project_id` | 101 | 0.051 ms |
+| `created_at >= c AND (OR …)` | `project_id` **and** `created_at >= c` | 1 | 0.019 ms |
+
+The gap is small at row 100. It grows linearly with page depth on the `OR`-only version and stays flat on the fixed one.
+
+**Found in review:** `ProjectsController.list()` returned `{ data: this.projects.findAll() }` without `await`. JSON serialization turns a Promise into `{}`, so `GET /api/v1/projects` answered `{"data":{}}` with status 200. The bug appeared in the Prisma migration (Lesson 4.4), when `findAll` became `async`. No test called this endpoint, so nothing caught it. Returning a bare Promise works because Nest awaits the handler's return value. A Promise nested *inside* an object is never awaited.
+
+## Lesson 4.6: N+1 queries
+
+### The shape of the problem
+
+The board's project list should show "7 open tasks" next to each project. The obvious code:
+
+```ts
+const projects = await repo.findAll();                 // 1 query
+for (const p of projects) {
+  p.openTaskCount = await repo.countOpenTasks(p.id);   // 1 query per project
+}
+```
+
+```
+API                                    Postgres
+ │── SELECT * FROM projects ─────────────▶│   1
+ │◀──────────────── N rows ───────────────│
+ │── SELECT count(*) … project_id = $1 ──▶│   2
+ │◀───────────────────────────────────────│
+ │── SELECT count(*) … project_id = $2 ──▶│   3
+ │          … N times …                   │
+ │── SELECT count(*) … project_id = $N ──▶│   N + 1
+```
+
+**N+1**: one query for the list, then one more for each item. Each query is fast. The cost is the **round trip** (yaani request jaana aur jawab aana): network, parsing, planning, a connection from the pool. Locally that is about 0.5 ms. In the cloud, the API and the database run on different machines, so it is about 1 to 5 ms. 1,000 projects × 2 ms = 2 seconds for one page load.
+
+Why it slips through review:
+
+- The ORM hides the SQL. The loop looks like ordinary code.
+- It is fast in development with 3 projects. It gets slow only with production data, and slowly, so nobody notices the day it was merged.
+- `Promise.all` does not fix it. It sends the N queries at once, but the pool has only about 10 connections, so they wait in line. It also takes every connection, so other requests wait too.
+
+Common places it hides: `await` inside a loop or `.map`, a serializer that loads a relation per item, and GraphQL resolvers (Chapter 17, DataLoader).
+
+### Three fixes
+
+| Fix | Queries | Rows sent to the API |
+| --- | --- | --- |
+| **Let the database aggregate**: Prisma's relation count | 1 | N projects |
+| **Batch**: projects, then one `groupBy` for all their IDs, merge in a `Map` | 2 | N projects + up to N count rows |
+| `include: { tasks: true }`, then count in JS | 1 or 2 | N projects + **every task** |
+
+The third fix gets the query count right and still loses: at 200,000 tasks it pulls 200,000 rows into Node memory to compute 1,000 numbers. Ask the database for the answer, not the raw rows.
+
+Prisma's relation count, filtered:
+
+```ts
+this.prisma.project.findMany({
+  orderBy: { createdAt: 'asc' },
+  include: {
+    _count: { select: { tasks: { where: { status: { not: 'done' } } } } },
+  },
+});
+// each row: { id, name, …, _count: { tasks: 2 } }
+```
+
+The batch pattern (worth knowing: it is how DataLoader works, and it works when the data comes from another service, not a relation):
+
+```ts
+const counts = await this.prisma.task.groupBy({
+  by: ['projectId'],
+  where: { projectId: { in: ids }, status: { not: 'done' } },
+  _count: { _all: true },
+});
+// [{ projectId, _count: { _all: 2 } }]. Projects with no open tasks are missing → default 0.
+```
+
+### How to see the queries
+
+Set `LOG_QUERIES=true` in `apps/api/.env` and restart the API. Every SQL statement Prisma sends is printed:
+
+```
+prisma:query (0.8ms) SELECT "public"."projects"."id", … FROM "public"."projects" …
+```
+
+Count them per request: `pnpm dev 2>&1 | tee /tmp/api.log`, make the request, then `grep -c 'prisma:query' /tmp/api.log`.
+
+### Exercise
+
+> **Status:** read; exercise skipped (learned from an outside tutorial). The checker stays in the repo behind `describe.skip`. Remove `.skip` to use it.
+
+The checker is `apps/api/test/projects-task-count.e2e-spec.ts`. It swaps in a Prisma client that counts queries, and fails if the count for `GET /projects` grows when projects are added.
+
+0. **Fix the review bug** in `ProjectsController.list()`. The first checker test fails on it today.
+1. **Contract.** In `packages/contracts/src/projects.ts`, add `projectListItemSchema = projectSchema.extend({ openTaskCount: z.number().int() })` with `.meta({ id: 'ProjectListItem' })`, and make `projectListSchema.data` an array of it. Only the list carries the count; `GET /projects/:id` stays a plain `Project`.
+2. **Write the N+1 version on purpose.** Add `countOpenTasks(projectId)` to the repository (`prisma.task.count` with `status: { not: 'done' }`), and loop over the projects in the service with `await`. Turn on `LOG_QUERIES`, call `GET /api/v1/projects`, and count the queries. Run the checker: the first test passes, the second fails with the query count.
+3. **Feel it.** Load 1,000 projects × 200 tasks (the SQL from Lesson 4.5, step 1), then time the request:
+   ```sh
+   curl -s -o /dev/null -w '%{time_total}s\n' localhost:3000/api/v1/projects
+   ```
+   Run it three times. Then switch the loop to `Promise.all` and time it again.
+4. **Fix it with one query.** Replace the loop with the `_count` version in `ProjectsRepository.findAll`. The repository maps `_count.tasks` to `openTaskCount`, so Prisma's shape never leaves it. Read the SQL Prisma generates in the log. Time it again. The checker passes.
+5. **Optional:** write the `groupBy` version and compare its two queries and its time.
+6. **Clean up:** `DELETE FROM projects WHERE name LIKE 'Load %';` (the foreign key cascades to their tasks).
+
+**Check**
+
+```sh
+pnpm --filter @teamboard/contracts build
+pnpm --filter @teamboard/api lint
+pnpm --filter @teamboard/api typecheck
+pnpm --filter @teamboard/api test:e2e      # 10 passed
+```
+
+## Lesson 4.7: Transactions
+
+### The problem: two writes, one meaning
+
+A new feature: a project can be created with **starter tasks** in one request.
+
+```http
+POST /api/v1/projects
+{ "name": "Website relaunch", "tasks": [{ "title": "Design" }, { "title": "Build" }] }
+```
+
+The server runs two `INSERT`s. For the client, they mean one thing: "the project, with these tasks, exists". Now imagine the second insert fails (a bad value, a dropped connection, the process restarts during a deploy):
+
+```
+Request 1                                   Database
+ ├─ INSERT INTO projects ('Website…')  ──▶  ✅ saved
+ └─ INSERT INTO tasks (…)              ──▶  ❌ error
+ └─ 500 to the client
+                                            projects: 'Website relaunch' (0 tasks)  ← orphan
+
+Request 2 (the client retries, as it should)
+ └─ assertNameFree('Website relaunch') ──▶  name is taken
+ └─ 409 Conflict                             ← the user can never fix it
+```
+
+Half of the work survived. The data is wrong, and the retry is blocked by the leftovers of the first attempt. This is the problem a **transaction** solves.
+
+### What a transaction is
+
+A transaction groups statements so the database treats them as one unit:
+
+```
+BEGIN
+  INSERT INTO projects …     ┐
+  INSERT INTO tasks …        ├─ visible only to this connection until COMMIT
+  INSERT INTO tasks …        ┘
+COMMIT     → all three become visible together
+ROLLBACK   → none of them ever happened
+```
+
+The four guarantees, called **ACID**:
+
+| Letter | Means | In Teamboard |
+| --- | --- | --- |
+| **A**tomicity | All or nothing | No project without its starter tasks |
+| **C**onsistency | Constraints hold at commit | The FK and `UNIQUE(name)` are still checked |
+| **I**solation | Others don't see half-done work | A `GET /projects` mid-transaction does not see the new project |
+| **D**urability | After `COMMIT`, it survives a crash | Written to the WAL on disk before `COMMIT` returns |
+
+**Every statement is already a transaction.** Without `BEGIN`, Postgres wraps each statement in its own tiny transaction (autocommit). That is why a single `createMany` of 50 rows is all-or-nothing by itself. The problem only appears when the work spans **several statements**.
+
+### A transaction lives on one connection
+
+```
+Prisma pool (≈10 connections)
+ ┌──────┬──────┬──────┬──────┬─────
+ │ conn │ conn │ conn │ conn │ …
+ └──┬───┴──────┴──────┴──────┴─────
+    └── taken by the transaction from BEGIN until COMMIT/ROLLBACK.
+        Every statement of the transaction must go through this connection.
+```
+
+Two consequences you will use:
+
+1. Inside a Prisma transaction you must use the **transaction client** (`tx`), not `this.prisma`. `this.prisma` takes another connection from the pool, which is outside the transaction. That write commits on its own and survives a rollback.
+2. While the transaction is open, that connection is out of the pool, and the rows it changed stay locked against other writers. **Keep transactions short.** No HTTP calls, emails, or file uploads inside one. Prisma's interactive transactions time out after **5 s** (`timeout`) and wait at most **2 s** for a free connection (`maxWait`).
+
+### Three ways to write a transaction in Prisma
+
+| Style | Code | Use when |
+| --- | --- | --- |
+| **Nested write** | `project.create({ data: { name, tasks: { create: [...] } } })` | Writes on one record and its relations. Prisma wraps it in a transaction for you. |
+| **Batch** | `$transaction([queryA, queryB])` | Independent queries, none needing the result of another. |
+| **Interactive** | `$transaction(async (tx) => { const p = await tx.project.create(…); await tx.task.createMany({ data: …p.id… }) })` | Later steps use earlier results, or contain logic (`if`, checks). Throwing inside the callback rolls everything back. |
+
+The interactive form is the general one, and it is the one that shows up across repositories, so this exercise uses it. The nested write is often the simplest correct answer for this exact feature; you will compare them at the end.
+
+### Where the transaction lives in a layered app
+
+The service decides what "one unit of work" is. Repositories only run queries. So the **service opens the transaction** and **passes `tx` down**:
+
+```
+ProjectsService.create(dto)
+ └─ prisma.$transaction(async (tx) => {
+       project = await projectsRepo.create(input, tx)
+       await projectsRepo.createStarterTasks(project.id, dto.tasks, tx)
+       return project
+    })
+```
+
+Repository methods take an optional client and default to the normal one, so existing callers do not change:
+
+```ts
+import { type Prisma } from '@teamboard/db';
+
+type Db = Prisma.TransactionClient;   // PrismaClient minus $transaction, $connect, …
+
+async create(input: …, db: Db = this.prisma): Promise<Project> {
+  return await db.project.create({ data: … });
+}
+```
+
+`PrismaClient` is assignable to `Prisma.TransactionClient`, so the default works. In larger codebases a library (`@nestjs-cls/transactional`) carries `tx` in `AsyncLocalStorage` so it does not have to be passed by hand. Passing it by hand first shows what such a library does for you.
+
+**Why `ProjectsRepository` writes the task rows.** `TasksModule` already imports `ProjectsModule` (a task needs its project to exist). If `ProjectsModule` imported `TasksModule` back, that would be a cycle. Creating a project with starter tasks is a Projects use case, so its repository inserts them. A transaction that keeps crossing module lines is a sign the boundary is in the wrong place. Chapter 12 (outbox, events) shows how separate services coordinate when one transaction cannot cover both.
+
+### Exercise
+
+The checker is `apps/api/test/projects-with-tasks.e2e-spec.ts`. It sends one valid task and one with a NUL character (`\u0000`). zod accepts that string, but Postgres `text` columns reject it, so the second `INSERT` fails after the first succeeded: a real mid-way failure, with no fake `throw`. (Chapter 8 rejects such input at the boundary. Here it is a convenient way to make the database fail.)
+
+**Step 1: transactions by hand (psql).** Open two terminals with `docker compose exec postgres psql -U teamboard teamboard`.
+
+1. Terminal A:
+   ```sql
+   BEGIN;
+   INSERT INTO projects (id, name, updated_at) VALUES (gen_random_uuid(), 'Tx demo', now());
+   SELECT name FROM projects WHERE name = 'Tx demo';   -- A sees it
+   ```
+2. Terminal B: `SELECT name FROM projects WHERE name = 'Tx demo';` B sees nothing (isolation).
+3. Terminal A: `ROLLBACK;` then the same `SELECT`. The row is gone; it never existed for anyone.
+4. Terminal A, an error mid-way:
+   ```sql
+   BEGIN;
+   INSERT INTO projects (id, name, updated_at) VALUES (gen_random_uuid(), 'Tx demo 2', now());
+   INSERT INTO tasks (id, project_id, title, updated_at)
+     VALUES (gen_random_uuid(), gen_random_uuid(), 'orphan', now());   -- FK error
+   SELECT 1;     -- read the error message
+   COMMIT;       -- read what psql prints
+   ```
+   After an error, Postgres refuses every statement until the transaction ends, and `COMMIT` turns into `ROLLBACK`.
+
+**Step 2: build the feature without a transaction, and watch it break.**
+
+1. **Contract.** `createProjectSchema` gets `tasks: z.array(createTaskSchema).max(50).optional()`. Build contracts.
+2. **Fix the review bug from 4.5:** `ProjectsController.list()` must `await` before wrapping in `{ data }`. The checker reads `GET /projects` to look for orphans.
+3. **Repository.** `ProjectsRepository.createStarterTasks(projectId, tasks)` using `prisma.task.createMany`. `create` stays as it is.
+4. **Service.** In `create`: `assertNameFree`, then `repo.create`, then `createStarterTasks` when `dto.tasks` has items. Two plain awaits, no transaction.
+5. Run the checker. Three tests pass. The atomicity test fails, either on the orphan check or on the retry (409). Reproduce it with curl too:
+   ```sh
+   curl -s -XPOST localhost:3000/api/v1/projects -H 'content-type: application/json' \
+     -d '{"name":"Broken","tasks":[{"title":"ok"},{"title":"bad\u0000"}]}'
+   curl -s -XPOST localhost:3000/api/v1/projects -H 'content-type: application/json' \
+     -d '{"name":"Broken","tasks":[{"title":"ok"}]}'        # 409, and the project has 0 tasks
+   ```
+
+**Step 3: fix it with an interactive transaction.**
+
+1. Inject the Prisma client into `ProjectsService` (`@Inject(PRISMA) private readonly prisma: PrismaClient`).
+2. Give `ProjectsRepository.create` and `createStarterTasks` an optional `db: Prisma.TransactionClient = this.prisma` parameter, and use `db` inside.
+3. Wrap the two writes in `this.prisma.$transaction(async (tx) => { … })`, pass `tx` to both, and return the project from the callback.
+4. The checker passes: 4 of 4. Delete the `Broken` project left over from step 2.
+
+**Step 4: break it.**
+
+1. **Forget `tx` once.** In the transaction, call `createStarterTasks(project.id, tasks)` without `tx`, but keep `create(…, tx)`. Run the checker. Then swap: pass `tx` only to `createStarterTasks`. Predict each result before you run it. Put `tx` back.
+2. **Hold it open too long.** Inside the callback, after the project insert, add `await new Promise((r) => setTimeout(r, 7000))`. Send a request, and while it waits, run this in psql:
+   ```sql
+   SELECT pid, state, now() - xact_start AS open_for, left(query, 60)
+   FROM pg_stat_activity WHERE state LIKE 'idle in transaction%';
+   ```
+   Then read the API's response and log (Prisma error `P2028`). Remove the sleep.
+3. **Compare with a nested write** (optional): replace the transaction with one `project.create({ data: { name, description, tasks: { create: dto.tasks } } })`. Run the checker. Decide which version you would keep and why.
+
+**Check**
+
+```sh
+pnpm --filter @teamboard/contracts build
+pnpm --filter @teamboard/api lint
+pnpm --filter @teamboard/api typecheck
+pnpm --filter @teamboard/api test:e2e      # 12 passed, 2 skipped
+```
+
+### What `assertNameFree` still does not protect
+
+The name check runs *before* the insert. Two requests with the same name can both pass the check, and both reach `INSERT`. A transaction does not stop this under Postgres's default isolation level (Read Committed): the `UNIQUE` constraint does, and the second request currently gets a `500`. That is Chapter 5: race conditions, isolation levels, and turning constraint errors into the right status code.
+
 ## My notes
 
 _Write in your own words: why the database checks rules the app already checks._

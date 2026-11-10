@@ -12,7 +12,9 @@ export const PRISMA = Symbol('PRISMA');
       provide: PRISMA,
       inject: [ConfigService],
       useFactory: (config: ConfigService<Env, true>) => {
-        return createPrismaClient(config.get('DATABASE_URL', { infer: true }));
+        return createPrismaClient(config.get('DATABASE_URL', { infer: true }), {
+          logQueries: config.get('LOG_QUERIES', { infer: true }),
+        });
       },
     },
   ],

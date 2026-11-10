@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // What the client may send to create a project. z.object strips unknown keys,
 // so { id: "x" } in the body is silently dropped, never stored.
@@ -22,11 +22,16 @@ export const projectSchema = z
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
-  .meta({ id: 'Project' });
+  .meta({ id: "Project" });
 
+export const projectListItemSchema = projectSchema
+  .extend({
+    openTaskCount: z.number().int(),
+  })
+  .meta({ id: "ProjectListItem" });
 export const projectListSchema = z
-  .object({ data: z.array(projectSchema) })
-  .meta({ id: 'ProjectList' });
+  .object({ data: z.array(projectListItemSchema) })
+  .meta({ id: "ProjectList" });
 
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
