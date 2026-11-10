@@ -12,8 +12,8 @@ export class ProjectsRepository {
     });
   }
 
-  async findById(id: string): Promise<Project | null> {
-    return await this.prisma.project.findUnique({ where: { id } });
+  async findById(id: string): Promise<Project> {
+    return await this.prisma.project.findUniqueOrThrow({ where: { id } });
   }
 
   async create(input: {

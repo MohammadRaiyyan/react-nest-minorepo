@@ -172,6 +172,179 @@ Measured over HTTP after the fix, 20 concurrent requests each:
 
 Final state of `common/prisma-errors.ts`: `isUniqueViolation` (P2002) and `isRecordNotFound` (P2025). `assertNameFree` was deleted. The constraint is the check.
 
+## Lesson 5.2: Lost updates and atomic updates
+
+### The feature: task numbers
+
+Tasks get a number per project, like Jira's `TB-42`: the first task in a project is 1, the next is 2, and so on. People say "TB-42" in standups and commit messages, so a number must never be reused.
+
+The storage: a counter on the project, and the number on each task.
+
+```
+projects                          tasks
+┌────┬──────────────────┐         ┌────┬────────────┬────────┐
+│ id │ last_task_number │         │ id │ project_id │ number │   UNIQUE (project_id, number)
+├────┼──────────────────┤         ├────┼────────────┼────────┤
+│ P1 │        5         │ ◀────── │ …  │     P1     │   5    │
+└────┴──────────────────┘         └────┴────────────┴────────┘
+```
+
+### The obvious code, and the lost update
+
+```ts
+const project = await repo.findById(projectId);           // read:  5
+const next = project.lastTaskNumber + 1;                   // compute in JS: 6
+await repo.update(projectId, { lastTaskNumber: next });    // write: 6
+await tasks.create({ projectId, number: next, … });        // task 6
+```
+
+**Read, change in JavaScript, write back** (read-modify-write). The value written depends on the value read. Two requests at once:
+
+```
+Request A                        Request B                        projects.last_task_number
+read            → 5                                                5
+                                 read            → 5               5
+write 5 + 1     → 6                                                6
+                                 write 5 + 1     → 6               6   ← A's increment is lost
+insert task #6  ✅
+                                 insert task #6  ❌ UNIQUE (project_id, number)
+```
+
+This is a **lost update**: B overwrote A's write with a value computed from stale data. Two tasks were requested, the counter moved by one.
+
+What the user sees depends on the constraints:
+
+| Constraint on `(project_id, number)` | Result |
+| --- | --- |
+| none | Two tasks both called `TB-6`. Silent, and found weeks later. |
+| `UNIQUE` | Data stays correct, but B gets `409` (the filter's P2002 safety net from 5.1) for creating a task, which conflicts with nothing the user did. |
+
+### Why this is not the 5.1 problem
+
+In 5.1 the request *inserted* a value the client chose (a name). The constraint was the whole answer: one insert wins, the rest get a correct `409`.
+
+Here the request *computes* a value from what it read. The constraint can detect the damage, but cannot repair it: B's correct answer is `201` with number 7, not an error. The fix has to remove the gap between the read and the write.
+
+### Atomic update: let the database do read + write in one step
+
+```sql
+UPDATE projects
+SET    last_task_number = last_task_number + 1
+WHERE  id = $1
+RETURNING last_task_number;
+```
+
+`last_task_number + 1` is computed **inside** Postgres, from the row as it is at that moment, not from a value the app read earlier. There is nothing in between for another request to slip into.
+
+Why two such updates cannot collide:
+
+```
+Request A                                Request B
+UPDATE … +1 ──▶ locks row P1, 5 → 6
+                                         UPDATE … +1 ──▶ row P1 is locked: WAIT
+COMMIT ──────▶ lock released
+                                         re-reads the latest committed row: 6
+                                         6 → 7, RETURNING 7
+```
+
+An `UPDATE` takes a **row lock** (a lock on that single row). A second `UPDATE` of the same row waits until the first one commits, then reads the **newest committed** value and applies its `+ 1` to that. Both requests get a different number, and neither is lost. (Every statement is its own transaction, Lesson 4.7, so "commit" here is the end of the statement.)
+
+In Prisma, number fields support atomic operations: `increment`, `decrement`, `multiply`, `divide`, `set`.
+
+```ts
+const { lastTaskNumber } = await this.prisma.project.update({
+  where: { id },
+  data: { lastTaskNumber: { increment: 1 } },
+  select: { lastTaskNumber: true },
+});
+```
+
+Compare `data: { lastTaskNumber: project.lastTaskNumber + 1 }`: that is a value computed in JavaScript, so it is the read-modify-write again. The atomic version uses `{ increment: 1 }`, and the arithmetic happens in Postgres.
+
+The same `update` also replaces the "does the project exist?" check: a missing project throws `P2025` (5.1), which becomes `404`. One query instead of two, and no check-then-act gap.
+
+### The general shape: put the condition and the change in one statement
+
+| Need | Unsafe | Atomic |
+| --- | --- | --- |
+| Counter | read `n`, write `n + 1` | `SET n = n + 1` (`increment`) |
+| Stock, balance | read, check `>= qty`, write `stock - qty` | `UPDATE … SET stock = stock - $q WHERE id = $1 AND stock >= $q` → 0 rows updated means "not enough" |
+| Claim a task | read `assignee IS NULL`, then set it | `UPDATE … SET assignee = $me WHERE id = $1 AND assignee IS NULL` → 0 rows means someone else claimed it |
+
+The last two use a **conditional update**: the `WHERE` holds the check, and the row count tells you if it passed. In Prisma that is `updateMany` (it returns `{ count }`). Lesson 5.5 builds optimistic locking on exactly this.
+
+### Gaps are fine
+
+If the counter increments and then the task insert fails, that number is never used: `TB-6, TB-8`. Postgres sequences behave the same way, and so does Jira. A number must never be **reused**; skipping one is harmless. To have no gaps you would wrap the increment and the insert in one transaction (4.7). The row lock is then held until the insert commits, so task creation in one project runs one at a time. That is acceptable here, but not needed.
+
+### Adding a `NOT NULL` column to a table that has rows
+
+`tasks.number` is required, but 188 tasks already exist. `ALTER TABLE tasks ADD COLUMN number INTEGER NOT NULL` fails, because the existing rows would have no value. The safe migration has three steps (Lesson 4.3: hand-edit the SQL with `--create-only`):
+
+```
+1. ADD COLUMN number INTEGER            (nullable for now)
+2. UPDATE … SET number = …              (backfill every existing row)
+3. ALTER COLUMN number SET NOT NULL     (now every row has one)
+```
+
+The backfill numbers existing tasks by creation order inside each project, with `ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at, id)`, then sets each project's counter to its highest number.
+
+### Exercise
+
+The checker is `apps/api/test/task-numbers.e2e-spec.ts`: sequential numbers per project; five rounds of 20 concurrent creates that must get exactly 1 to 20; and `404` for a missing project.
+
+0. **Fix the regression from commit `9cf06f8`.** `ProjectsService.findOne` now relies on `P2025`, but `findUnique` never throws: it returns `null` for a missing row. Only writes (`update`, `delete`) and `findUniqueOrThrow` throw `P2025`. Measured on the API:
+
+   | Request for a missing project | Should be | Is |
+   | --- | --- | --- |
+   | `GET /projects/:id` | 404 | **200, empty body** |
+   | `GET /projects/:id/tasks` | 404 | **200, `{"data":[]}`** |
+   | `POST /projects/:id/tasks` | 404 | **500** (foreign key violation on insert) |
+
+   Make `findOne` return `Promise<Project>` again and throw `404` for a missing project. Either check for `null`, or use `findUniqueOrThrow` and keep your `P2025` catch.
+
+1. **Schema.** `Project`: `lastTaskNumber Int @default(0) @map("last_task_number")`. `Task`: `number Int`, and `@@unique([projectId, number])`.
+2. **Migration.** `pnpm --filter @teamboard/db db:migrate --create-only --name task_numbers`. Read the generated SQL, and see why it would fail on a table with rows. Replace the `tasks` part with this (tested on your current data in a rolled-back transaction: 188 tasks, 188 distinct numbers, every counter matches):
+   ```sql
+   -- AlterTable
+   ALTER TABLE "projects" ADD COLUMN "last_task_number" INTEGER NOT NULL DEFAULT 0;
+
+   -- 1. Add the column as nullable
+   ALTER TABLE "tasks" ADD COLUMN "number" INTEGER;
+
+   -- 2. Backfill: number existing tasks 1, 2, 3 … per project, in creation order
+   UPDATE "tasks" t SET "number" = n.rn
+   FROM (
+     SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at, id) AS rn
+     FROM "tasks"
+   ) n
+   WHERE t.id = n.id;
+
+   UPDATE "projects" p
+   SET "last_task_number" = COALESCE((SELECT MAX("number") FROM "tasks" WHERE project_id = p.id), 0);
+
+   -- 3. Now every row has a value
+   ALTER TABLE "tasks" ALTER COLUMN "number" SET NOT NULL;
+
+   -- CreateIndex
+   CREATE UNIQUE INDEX "tasks_project_id_number_key" ON "tasks"("project_id", "number");
+   ```
+   Then `pnpm --filter @teamboard/db db:migrate` to apply it, and `pnpm --filter @teamboard/db build`.
+3. **Contract.** `taskSchema` gets `number: z.number().int().positive()`. Build contracts.
+4. **The naive version, on purpose.** `ProjectsService.nextTaskNumber(projectId)`: `findOne`, then `repo.update(id, { lastTaskNumber: project.lastTaskNumber + 1 })`, return the new number. `TasksService.create` calls it and passes `number` to the repository. Run the checker. The sequential test passes. The concurrent one fails: read its statuses. Then compare the counter with the real task count in psql for one of the test's projects.
+5. **The atomic version.** Replace it with a repository method that uses `{ increment: 1 }` and `select`. Translate `P2025` to `404` in the service. `TasksService.create` no longer needs its own `findOne`, because the increment is the existence check. Turn on `LOG_QUERIES`, create one task, and read the SQL Prisma sends for the increment. Run the checker.
+6. **Break it, in psql (two terminals).** Pick a project: `SELECT id, last_task_number FROM projects LIMIT 1;`
+   - **Atomic:** A: `BEGIN; UPDATE projects SET last_task_number = last_task_number + 1 WHERE id = '…' RETURNING last_task_number;` B: the same `UPDATE` (without `BEGIN`). Watch B hang. A: `COMMIT;` Watch B return immediately. Which number did each get?
+   - **Read-modify-write:** A: `BEGIN; SELECT last_task_number FROM projects WHERE id = '…';` B: `BEGIN;` and the same `SELECT`. Both see `n`. A: `UPDATE projects SET last_task_number = n+1 WHERE id = '…'; COMMIT;` (type the number). B: the same `UPDATE` with the same number, then `COMMIT;`. Two increments happened, and the counter moved by one.
+
+**Check**
+
+```sh
+pnpm --filter @teamboard/contracts build
+pnpm lint && pnpm typecheck
+pnpm --filter @teamboard/api test:e2e      # 12 passed, 6 skipped
+```
+
 ## My notes
 
 _Write in your own words: why a check in application code cannot replace a constraint in the database._
