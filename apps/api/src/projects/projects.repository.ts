@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { PRISMA } from '../database/database.module.ts';
 import { PrismaClient, type Project } from '@teamboard/db';
 
-
 @Injectable()
 export class ProjectsRepository {
   constructor(@Inject(PRISMA) private readonly prisma: PrismaClient) {}
@@ -15,10 +14,6 @@ export class ProjectsRepository {
 
   async findById(id: string): Promise<Project | null> {
     return await this.prisma.project.findUnique({ where: { id } });
-  }
-
-  async findByName(name: string): Promise<Project | null> {
-    return await this.prisma.project.findUnique({ where: { name } });
   }
 
   async create(input: {

@@ -19,12 +19,6 @@ export class ProjectsService {
     return await this.repo.findAll();
   }
 
-  async findOne(id: string): Promise<Project> {
-    const project = await this.repo.findById(id);
-    if (!project) throw new NotFoundException(`Project ${id} not found`);
-    return project;
-  }
-
   async create(dto: CreateProjectInput): Promise<Project> {
     try {
       return await this.repo.create({
@@ -42,8 +36,6 @@ export class ProjectsService {
   }
 
   async update(id: string, dto: UpdateProjectInput): Promise<Project> {
-    await this.findOne(id);
-
     try {
       const changes: Partial<Pick<Project, 'name' | 'description'>> = {};
       if (dto.name !== undefined) changes.name = dto.name;
