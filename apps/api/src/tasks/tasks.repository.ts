@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {  Position } from '../common/cursor.ts';
+import { Position } from '../common/cursor.ts';
 import { PRISMA } from '../database/database.module.ts';
 import { PrismaClient, Task, TaskStatus } from '@teamboard/db';
 
@@ -26,15 +26,17 @@ export class TasksRepository {
       take: opts.limit + 1,
     });
   }
-  async getById(id: string): Promise<Task | null> {
-    return await this.prisma.task.findUnique({ where: { id } });
+  async getById(id: string): Promise<Task> {
+    return await this.prisma.task.findUniqueOrThrow({ where: { id } });
   }
 
   async create(
     projectId: string,
-    input: Pick<Task, 'title' | 'description'>,
+    input: Pick<Task, 'title' | 'description' | 'number'>,
   ): Promise<Task> {
-    return await this.prisma.task.create({ data: { ...input, projectId } });
+    return await this.prisma.task.create({
+      data: { ...input, projectId },
+    });
   }
 
   async update(

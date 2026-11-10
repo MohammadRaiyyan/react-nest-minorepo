@@ -12,34 +12,36 @@ datasource db {
 }
 
 // Lesson 4.2: write the Project and Task models here.
-model Project{
-  id String @id @default(uuid(7)) @db.Uuid
-  name String @unique
-  description String?
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-
-  tasks Task[]
+model Project {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  name           String   @unique
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastTaskNumber Int      @default(0) @map("last_task_number")
+  tasks          Task[]
 
   @@map("projects")
 }
 
-model Task{
-  id String @id @default(uuid(7)) @db.Uuid
-  projectId String  @map("project_id") @db.Uuid
-  title String 
+model Task {
+  id          String     @id @default(uuid(7)) @db.Uuid
+  projectId   String     @map("project_id") @db.Uuid
+  title       String
   description String?
-  status TaskStatus  @default(todo)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  status      TaskStatus @default(todo)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  project Project @relation(fields: [projectId],references: [id],onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  number  Int
 
-  @@map("tasks")
+  @@unique([projectId, number])
   @@index([projectId, createdAt, id])
+  @@map("tasks")
 }
 
-enum TaskStatus{
+enum TaskStatus {
   todo
   in_progress
   done

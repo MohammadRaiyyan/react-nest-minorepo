@@ -6,6 +6,15 @@ import { PrismaClient, type Project } from '@teamboard/db';
 export class ProjectsRepository {
   constructor(@Inject(PRISMA) private readonly prisma: PrismaClient) {}
 
+  async incrementTaskNumber(id: string): Promise<number> {
+    const { lastTaskNumber } = await this.prisma.project.update({
+      where: { id },
+      data: { lastTaskNumber: { increment: 1 } },
+      select: { lastTaskNumber: true },
+    });
+    return lastTaskNumber;
+  }
+
   async findAll(): Promise<Project[]> {
     return await this.prisma.project.findMany({
       orderBy: { createdAt: 'asc' },

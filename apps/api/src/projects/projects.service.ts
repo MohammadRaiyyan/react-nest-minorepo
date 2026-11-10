@@ -24,7 +24,16 @@ export class ProjectsService {
       return await this.repo.findById(id);
     } catch (error: unknown) {
       if (isRecordNotFound(error))
-        throw new NotFoundException(`Project not found`);
+        throw new NotFoundException(`Project does not exist`);
+      throw error;
+    }
+  }
+  async nextTaskNumber(projectId: string): Promise<number> {
+    try {
+      return await this.repo.incrementTaskNumber(projectId);
+    } catch (error: unknown) {
+      if (isRecordNotFound(error))
+        throw new NotFoundException(`Project does not exist`);
       throw error;
     }
   }
@@ -38,7 +47,7 @@ export class ProjectsService {
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
         throw new ConflictException(
-          `A project named "${dto.name}" already exists`,
+          `A project named "${dto.name}" already exist`,
         );
       }
       throw error;
@@ -54,11 +63,11 @@ export class ProjectsService {
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
         throw new ConflictException(
-          `A project named "${dto.name}" already exists`,
+          `A project named "${dto.name}" already exist`,
         );
       }
       if (isRecordNotFound(error)) {
-        throw new NotFoundException(`The project does not exists`);
+        throw new NotFoundException(`Project does not exist`);
       }
       throw error;
     }
@@ -69,7 +78,7 @@ export class ProjectsService {
       await this.repo.delete(id);
     } catch (e: unknown) {
       if (isRecordNotFound(e)) {
-        throw new NotFoundException('The project is already deleted');
+        throw new NotFoundException('Project does not exist');
       }
       throw e;
     }

@@ -141,8 +141,8 @@ Teamboard live on a managed platform: SPA, API, and worker deployed from GitHub 
   - [x] 4.7 Transactions (read, exercise skipped)
 - [ ] Chapter 5: Concurrency, race conditions, and locking ([notes](05-concurrency.md))
   - [x] 5.1 One thread, many requests: where interleaving happens
-  - [ ] 5.2 Lost updates and atomic updates ← **resume here**
-  - [ ] 5.3 Isolation levels
+  - [x] 5.2 Lost updates and atomic updates
+  - [ ] 5.3 Isolation levels ← **resume here**
   - [ ] 5.4 Pessimistic locking (`SELECT … FOR UPDATE`)
   - [ ] 5.5 Optimistic locking (version columns)
   - [ ] 5.6 Distributed locks in Redis

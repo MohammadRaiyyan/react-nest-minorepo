@@ -345,6 +345,39 @@ pnpm lint && pnpm typecheck
 pnpm --filter @teamboard/api test:e2e      # 12 passed, 6 skipped
 ```
 
+### What 5.2 showed
+
+> Step 6 (the psql experiments) was skipped.
+
+**The naive version passed every sequential test and failed under load.** 20 concurrent creates in a fresh project, read-modify-write counter:
+
+```
+counter=2 | tasks=2 | numbers=1,2      (17–18 of 20 requests got 409, over 3 runs)
+```
+
+Twenty increments were requested, and the counter moved by two. Almost every request read the same `0` in the gap between `findOne` and `update`, so they all wrote `1` and all tried to insert task #1. `UNIQUE(project_id, number)` kept the data correct and turned every loser into a `409`. The constraint detected the damage, but it could not give those users their task.
+
+**The atomic version:** five rounds of 20, every project `counter=20 | tasks=20 | distinct=20`, no `409`s. The SQL Prisma sends for `{ increment: 1 }` with `select`:
+
+```sql
+UPDATE "public"."projects"
+SET "last_task_number" = ("public"."projects"."last_task_number" + $1), "updated_at" = $2
+WHERE ("public"."projects"."id" = $3 AND 1=1)
+RETURNING "public"."projects"."id", "public"."projects"."last_task_number"
+```
+
+One statement: the arithmetic happens in Postgres, and `RETURNING` hands back the new value, so no follow-up `SELECT` is needed.
+
+**Side effect found in the SQL:** `@updatedAt` makes Prisma set `updated_at` on every update, so creating a task now bumps the project's `updatedAt`. That can be a feature ("recent activity") or a bug ("last edited 2 minutes ago" when nobody edited the project). Reading the generated SQL is how you find these.
+
+**Things that came up along the way:**
+
+- **`findUnique` never throws P2025; it returns `null`.** Only writes (`update`, `delete`) and `findUniqueOrThrow` throw it. A `findOne` that caught P2025 around `findUnique` made `GET /projects/:missing` return `200` with an empty body, and `POST /projects/:missing/tasks` return `500` (foreign key violation). Fixed with `findUniqueOrThrow`.
+- **A failed `migrate dev` did not touch the dev database.** A migration that kept both the hand-written `ADD COLUMN number` and Prisma's generated one failed in the **shadow database** with `42701 column already exists`, before anything reached the dev data. `migrate deploy` (production) has no shadow database, so the same mistake there leaves a half-applied migration. Always read migration SQL before applying it.
+- **Prisma's generated types caught the new required column.** Once `number` was required, `TasksRepository.create` stopped typechecking until a number was passed.
+- **The type keeps the unsafe path closed.** `'lastTaskNumber'` was removed from `ProjectsRepository.update`'s `changes` type once the atomic method existed, so nobody can write a counter value computed in JavaScript.
+- **Ownership:** the counter belongs to Projects, so `ProjectsService.nextTaskNumber` hands Tasks a ready number. Tasks never sees how it was produced.
+
 ## My notes
 
 _Write in your own words: why a check in application code cannot replace a constraint in the database._
