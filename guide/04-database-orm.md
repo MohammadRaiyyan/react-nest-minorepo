@@ -479,6 +479,96 @@ The pagination e2e test passed before the rewrite (in memory) and after it (Pris
 
 The e2e tests leave rows in the dev database on every run. Chapter 9 gives tests their own database, reset between runs.
 
+## Lesson 4.5: Indexes and query plans
+
+### What an index is
+
+Without an index, the only way to find "tasks of project X" is to read every row in `tasks` and keep the matching ones: a **sequential scan**. An **index** is a separate, sorted structure (a B-tree) that maps column values to rows, like the index at the back of a book. Postgres jumps to the right place and reads only what it needs.
+
+The cost: every insert and update must also update each index, and indexes take disk space. Index what your queries filter and sort on, not every column.
+
+Postgres creates indexes automatically for primary keys and `UNIQUE` columns. It does **not** create one for foreign keys, so `tasks.project_id` has none yet.
+
+### Reading a query plan
+
+`EXPLAIN ANALYZE <query>` runs the query and shows how Postgres executed it:
+
+| Line in the plan | Meaning |
+| --- | --- |
+| `Seq Scan` | Read the whole table |
+| `Index Scan using …` | Walk an index to the matching rows |
+| `Index Cond` | The part of the `WHERE` the index answers directly. Fast. |
+| `Filter` + `Rows Removed by Filter` | Rows read and then thrown away. The number to watch. |
+| `Sort` | Rows sorted in memory after reading. An index in the right order avoids this. |
+| `Execution Time` | How long it took |
+
+### Measured: 200,000 tasks, 1,000 projects
+
+The first page of one project's tasks (`WHERE project_id = … ORDER BY created_at, id LIMIT 21`):
+
+| Setup | Plan | Rows read and discarded | Time |
+| --- | --- | --- | --- |
+| No index | Parallel Seq Scan + Sort | 199,800 | 10.4 ms |
+| Index `(project_id, created_at, id)` | Index Scan, no sort | 0 | 0.13 ms |
+| Index `(created_at, project_id)` | Index Scan + Incremental Sort | (scans the wrong order) | 1.26 ms |
+
+80× faster with the right index. And this table is small: the sequential scan grows with the whole table, so at 20 million tasks it takes about a second per request, while the index scan stays near 0.1 ms.
+
+### Column order matters
+
+A composite index sorts by its first column, then the second within that, and so on, like a phone book sorted by last name, then first name.
+
+```
+(project_id, created_at, id)
+ └ jump to project X ┘ └ already in page order ┘   → no sort, stop after 21 rows
+```
+
+`(created_at, project_id)` is the same columns in the wrong order: Postgres cannot jump to one project, and has to sort afterwards. Put **equality columns first** (`project_id = …`), then **sort/range columns** in the order of the `ORDER BY`.
+
+### The cursor condition and the index
+
+For a page after the cursor, the shape of the `WHERE` decides whether the index can *start* at the cursor:
+
+| Cursor condition | Index Cond | Rows discarded (page after row 100) |
+| --- | --- | --- |
+| Prisma `OR` only: `createdAt > c OR (createdAt = c AND id > i)` | `project_id` only | 101 |
+| Row comparison (raw SQL): `(created_at, id) > (c, i)` | `project_id` + the row comparison | 0 |
+| `OR` **plus** `createdAt >= c` | `project_id` + `created_at >= c` | 1 |
+
+With the plain `OR`, Postgres sometimes reads every row of the project from the start and throws away the ones before the cursor, which makes deep pages cost what offset pagination costs. Prisma cannot write a row comparison, but it can add `createdAt: { gte: after.createdAt }`. That redundant condition gives the index a starting point, and the `OR` only has to remove the few rows that share the cursor's exact timestamp.
+
+### Exercise
+
+1. **Load realistic data** into the dev database (psql):
+   ```sql
+   INSERT INTO projects (id, name, updated_at)
+   SELECT gen_random_uuid(), 'Load ' || g, now() FROM generate_series(1, 1000) g;
+
+   INSERT INTO tasks (id, project_id, title, status, created_at, updated_at)
+   SELECT gen_random_uuid(), p.id, 'Task ' || g,
+          (CASE WHEN random() < 0.2 THEN 'done' ELSE 'todo' END)::"TaskStatus",
+          now() - random() * interval '365 days', now()
+   FROM projects p, generate_series(1, 200) g
+   WHERE p.name LIKE 'Load %';
+
+   ANALYZE;
+   ```
+   Note the explicit `id` and `updated_at`: those defaults live in the Prisma client, not the database (Lesson 4.2).
+2. **Measure without an index:**
+   ```sql
+   EXPLAIN ANALYZE
+   SELECT * FROM tasks
+   WHERE project_id = (SELECT id FROM projects WHERE name = 'Load 500')
+   ORDER BY created_at, id
+   LIMIT 21;
+   ```
+   Find `Seq Scan`, `Rows Removed by Filter`, and `Execution Time`.
+3. **Add the index in the Prisma schema:** `@@index([projectId, createdAt, id])` on `Task`. Run `db:migrate --name tasks_project_created_index`. Read the generated SQL.
+4. **Measure again.** Same `EXPLAIN ANALYZE`. Compare the plan and the time.
+5. **Fix the cursor condition** in `TasksRepository.list`: add `createdAt: { gte: opts.after.createdAt }` next to the `OR`, only when there is a cursor. The e2e tests must still pass.
+
+In production, a plain `CREATE INDEX` blocks writes to the table while it builds. On a large live table, use `CREATE INDEX CONCURRENTLY` in its own hand-edited migration (Lesson 4.3).
+
 ## My notes
 
 _Write in your own words: why the database checks rules the app already checks._

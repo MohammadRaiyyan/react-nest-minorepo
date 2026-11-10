@@ -28,8 +28,8 @@ It is a good teaching project because it needs almost everything real apps need:
 | Attachments on tasks | File uploads, background processing |
 | "Task due tomorrow" emails | Cron, queues, notifications |
 | Dashboard with nested data | GraphQL (as a comparison to REST) |
-| Separate notification service | Microservices, events |
-| Running it on a cluster | Docker, Kubernetes, CI/CD |
+| A worker running as its own service | Service boundaries, events between services |
+| Running it in the cloud | Docker, a managed platform (Railway or Render), CI/CD |
 
 ## The stack
 
@@ -43,7 +43,7 @@ It is a good teaching project because it needs almost everything real apps need:
 | Cache, queues, rate limits | Redis + BullMQ | One tool covers three chapters. |
 | File storage | S3 (MinIO locally) | Same API locally and in the cloud. |
 | Observability | Pino, OpenTelemetry, Sentry | Structured logs, traces, error tracking. |
-| Deployment | Docker, then a VM, then a managed container platform, then Kubernetes | Each step solves a problem the previous one has. |
+| Deployment | Docker + a managed platform (Railway or Render) + GitHub Actions | What early and mid-size startups actually run. |
 
 ### Why a separate SPA and API
 
@@ -55,11 +55,15 @@ The split brings real problems you will solve along the way. The browser and API
 
 Every option answers the same five questions. Where does the container run? How many copies run? How does traffic reach them? How do you replace them without downtime? Where do config and secrets come from?
 
-1. **A VM with Docker Compose (or Kamal).** You rent one server and run containers on it. Cheap and simple. You handle scaling, restarts across machines, and OS updates yourself.
-2. **Managed container platforms.** AWS ECS/Fargate, Google Cloud Run, Azure Container Apps, Fly.io, Render, Railway. You hand over a container image. The platform runs, scales, and replaces it.
-3. **Orchestrators.** Kubernetes (EKS, GKE, AKS, or self-hosted), HashiCorp Nomad, Docker Swarm (mostly legacy). You describe the desired state. The orchestrator keeps the cluster matching it across many machines.
+1. **A VM with Docker Compose (or Kamal).** You rent one server and run containers on it. Cheap and simple. You handle scaling, restarts, and OS updates yourself.
+2. **Managed platforms.** Railway, Render, Fly.io, Google Cloud Run, AWS ECS/Fargate. You hand over a container image. The platform runs, scales, and replaces it, and offers managed Postgres and Redis.
+3. **Orchestrators.** Kubernetes, Nomad. You describe the desired state across many machines. Usually run by a platform team.
 
-Kubernetes answers the five questions most explicitly, so learning it teaches the concepts behind every other option.
+Teamboard deploys to option 2. That is where early and mid-size startups run, and where a full-stack developer does real deployment work. Option 3 is covered as concepts only (Chapter 21), so you can follow the conversation when you meet it.
+
+### Scope decision (2026-11-10)
+
+Infrastructure that a platform team or a cloud provider runs (Kubernetes hands-on, load-testing labs, database partitioning and sharding) is out of scope. The scaling work a full-stack developer does every week stays in: indexes and query plans, N+1, caching, rate limiting, queues, stateless servers, connection pooling, and adding instances on a managed platform.
 
 ## Frequency map
 
@@ -67,8 +71,8 @@ Not everything gets used every day. Spend depth where the frequency is.
 
 - **Daily:** API design, validation, database queries, migrations, auth checks, logging, error handling.
 - **Weekly:** caching, background jobs, file uploads, notifications, tests.
-- **Monthly:** WebSockets, rate limit tuning, alert rules, CI pipeline changes.
-- **Rare, but you must understand them:** GraphQL setup, splitting a microservice, Kubernetes manifests, database scaling.
+- **Monthly:** WebSockets, rate limit tuning, alert rules, CI pipeline changes, deploy configuration.
+- **Rare, but you must understand them:** GraphQL setup, splitting out a service, what Kubernetes does.
 
 ## Chapters
 
@@ -88,7 +92,7 @@ Not everything gets used every day. Spend depth where the frequency is.
 
 10. **Logging, tracing, activity tracking.** Structured logs, request IDs, audit log table, OpenTelemetry, error tracking.
 11. **Caching and rate limiting.** Cache-aside with Redis, invalidation, HTTP caching, CDN, rate limit algorithms.
-12. **Background jobs, cron, and webhooks.** Queues, workers, retries, backoff, idempotent jobs, dead-letter queues, scheduled jobs, the outbox pattern. Receiving webhooks (Stripe as the example): signature checks, duplicate deliveries, fast acknowledgement then async processing. Sending webhooks to your own customers with retries.
+12. **Background jobs, cron, and webhooks.** The worker as its own service (Teamboard's second service). Queues, workers, retries, backoff, idempotent jobs, dead-letter queues, scheduled jobs, the outbox pattern. Receiving webhooks (Stripe as the example): signature checks, duplicate deliveries, fast acknowledgement then async processing. Sending webhooks to your own customers with retries.
 13. **File uploads.** Presigned URLs, multipart uploads, processing jobs, access control on files.
 14. **Notifications and alerts.** In-app, email, push. User preferences. Operational alerts for the team (metrics, alert rules, on-call).
 15. **Search.** Postgres full-text search, trigram matching for typos, ranking. When to move to a dedicated engine (Meilisearch, OpenSearch) and how to keep it in sync with the database.
@@ -98,18 +102,16 @@ Not everything gets used every day. Spend depth where the frequency is.
 16. **WebSockets.** Gateway setup, auth on connect, rooms per org, scaling across instances with Redis, SSE as the simpler option.
 17. **GraphQL.** Schema, resolvers, DataLoader, auth in resolvers, when REST is the better choice.
 
-### Part 4: Scaling, architecture, and deployment (rare, high impact)
+### Part 4: Shipping it (Docker, cloud, CI/CD)
 
-18. **Containers.** Dockerfiles, multi-stage builds, images, twelve-factor apps.
-19. **Scaling the app tier and load balancing.** Vertical vs horizontal scaling. Why horizontal scaling needs stateless servers. What a load balancer is, L4 vs L7, balancing algorithms, health checks, sticky sessions, TLS termination. Finding the bottleneck with load tests (k6). Queues as shock absorbers. Autoscaling rules. Capacity planning.
-20. **Scaling the database.** Why the database is the hardest part to scale. Fix queries and indexes first. Connection pooling (PgBouncer, Prisma limits). Caching to cut reads. Read replicas and replication lag. Vertical scaling of the database. Partitioning and sharding. Managed options (RDS, Aurora, Neon, Citus). Backups, point-in-time recovery, and testing a restore.
-21. **Modular monolith to microservices.** When to split, sync vs async communication, events, failure handling, contracts between teams.
-22. **VMs, containers, and pods.** Deploy to a VM with Compose first and hit its limits. Then managed platforms (Cloud Run, ECS). Then Kubernetes objects (Pod, Deployment, Service, Ingress, ConfigMap, Secret), probes, autoscaling, rolling deploys, running migrations during deploys.
-23. **CI/CD and environments.** GitHub Actions, preview environments, deploy pipelines, rollbacks, feature flags.
+18. **Docker.** Dockerfiles for the API, the worker, and the web app. Multi-stage builds, small images, twelve-factor config. The whole stack in Compose.
+19. **Deploying to a managed platform (Railway or Render).** Web, API, and worker as services. Managed Postgres and Redis. Secrets. Running migrations on deploy. Health checks and zero-downtime deploys. Adding instances, and what breaks when you do. Connection pooling. Backups and restoring a managed database. Custom domain and TLS.
+20. **CI/CD with GitHub Actions.** Lint, typecheck, and tests (with a real Postgres) on every pull request. Preview environments. Deploy on merge. Rollbacks. Feature flags.
+21. **Architecture concepts (reading).** Modular monolith vs microservices, and when to split. Sync vs async communication between services. VMs, containers, pods, deployments, and services: what each one is, so you can follow the conversation.
 
 ### Capstone
 
-Deploy Teamboard to a local Kubernetes cluster with every piece running: SPA, API, worker, notification service, Postgres, Redis, MinIO.
+Teamboard live on a managed platform: SPA, API, and worker deployed from GitHub Actions, with managed Postgres and Redis, object storage, logs, and alerts.
 
 ## Progress
 

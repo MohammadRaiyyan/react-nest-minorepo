@@ -16,6 +16,7 @@ export class TasksRepository {
         ...(opts.status && { status: opts.status }),
         ...(opts.after && {
           OR: [
+            {createdAt: { gte: opts.after.createdAt }},
             { createdAt: { gt: opts.after.createdAt } },
             { createdAt: opts.after.createdAt, id: { gt: opts.after.id } },
           ],
