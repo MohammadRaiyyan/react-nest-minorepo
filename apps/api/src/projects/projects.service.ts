@@ -19,6 +19,16 @@ export class ProjectsService {
     return await this.repo.findAll();
   }
 
+  async findOne(id: string): Promise<Project | null> {
+    try {
+      return await this.repo.findById(id);
+    } catch (error: unknown) {
+      if (isRecordNotFound(error))
+        throw new NotFoundException(`Project ${id} not found`);
+      throw error;
+    }
+  }
+
   async create(dto: CreateProjectInput): Promise<Project> {
     try {
       return await this.repo.create({
