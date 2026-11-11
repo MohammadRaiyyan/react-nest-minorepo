@@ -9,6 +9,8 @@ import { APP_FILTER } from '@nestjs/core';
 import { ProblemDetailsFilter } from './common/problem-details.filter.ts';
 import { CommonModule } from './common/common.module.ts';
 import { DatabaseModule } from './database/database.module.ts';
+import { UsersModule } from './users/users.module.ts';
+import { AuthModule } from './auth/auth.module.ts';
 
 @Module({
   imports: [
@@ -26,9 +28,11 @@ import { DatabaseModule } from './database/database.module.ts';
     ProjectsModule,
     TasksModule,
     CommonModule,
-    DatabaseModule
+    DatabaseModule,
+    UsersModule,
+    AuthModule,
   ],
   controllers: [AppController],
-  providers:[{provide:APP_FILTER,useClass:ProblemDetailsFilter}]
+  providers: [{ provide: APP_FILTER, useClass: ProblemDetailsFilter }],
 })
 export class AppModule {}

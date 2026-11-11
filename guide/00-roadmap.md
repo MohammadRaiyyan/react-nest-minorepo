@@ -139,11 +139,17 @@ Teamboard live on a managed platform: SPA, API, and worker deployed from GitHub 
   - [x] 4.5 Indexes and query plans
   - [x] 4.6 N+1 queries (read, exercise skipped)
   - [x] 4.7 Transactions (read, exercise skipped)
-- [ ] Chapter 5: Concurrency, race conditions, and locking ([notes](05-concurrency.md))
+- [x] Chapter 5: Concurrency, race conditions, and locking ([notes](05-concurrency.md))
   - [x] 5.1 One thread, many requests: where interleaving happens
   - [x] 5.2 Lost updates and atomic updates
-  - [ ] 5.3 Isolation levels ← **resume here**
-    - _Paused 2026-11-10._ Concept taught in chat and written in the chapter file. Exercise not started: next is **step 1** (naive WIP-limit rule in `TasksService.update`). Checker `apps/api/test/wip-limit.e2e-spec.ts` fails as expected (6 × 200 in the concurrent round).
-  - [ ] 5.4 Pessimistic locking (`SELECT … FOR UPDATE`)
-  - [ ] 5.5 Optimistic locking (version columns)
-  - [ ] 5.6 Distributed locks in Redis
+  - [x] 5.3 Isolation levels (read, exercise skipped)
+  - [ ] 5.4 Pessimistic locking (`SELECT … FOR UPDATE`) (skipped)
+  - [ ] 5.5 Optimistic locking (version columns) (skipped)
+  - [ ] 5.6 Distributed locks in Redis (skipped)
+- [ ] Chapter 6: Authentication ([notes](06-authentication.md))
+  - [ ] 6.1 Users and password hashing (built and passing; break-it step 6 left) ← **resume here**
+  - [ ] 6.2 Sessions and cookies: log in, log out
+  - [ ] 6.3 Guarding routes: the current user on every request
+  - [ ] 6.4 JWT access and refresh tokens, and when to use them
+  - [ ] 6.5 OAuth login (Sign in with Google)
+  - [ ] 6.6 Build or buy: auth libraries and providers (read)

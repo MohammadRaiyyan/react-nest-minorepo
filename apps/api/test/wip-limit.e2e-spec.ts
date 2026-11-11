@@ -8,7 +8,8 @@ import { configureApp } from '../src/configure-app.ts';
 // unique constraint can enforce it: concurrent moves must still stop at 3.
 const LIMIT = 3;
 
-describe('WIP limit: at most 3 tasks in progress per project (e2e)', () => {
+// Skipped: the 5.3 exercise was skipped. Remove .skip to use it as a checker.
+describe.skip('WIP limit: at most 3 tasks in progress per project (e2e)', () => {
   let app: INestApplication;
   let baseUrl: string;
 

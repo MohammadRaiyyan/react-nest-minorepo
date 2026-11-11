@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createDocument, type oas32 } from 'zod-openapi';
+import { signupSchema, userSchema } from './auth.ts';
 import { problemSchema } from './problem.ts';
 import {
   createProjectSchema,
@@ -48,8 +49,20 @@ export const openApiDocument: oas32.OpenAPIObject = createDocument({
     description: 'Every error response uses application/problem+json. Clients branch on `code`, never on message text.',
   },
   servers: [{ url: '/api/v1' }],
-  tags: [{ name: 'Projects' }, { name: 'Tasks' }],
+  tags: [{ name: 'Auth' }, { name: 'Projects' }, { name: 'Tasks' }],
   paths: {
+    '/auth/signup': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Create an account',
+        requestBody: { content: json(signupSchema) },
+        responses: {
+          '201': ok('The new user (never includes the password hash)', userSchema),
+          '400': problem('Invalid body'),
+          '409': problem('An account with this email already exists'),
+        },
+      },
+    },
     '/projects': {
       get: {
         tags: ['Projects'],

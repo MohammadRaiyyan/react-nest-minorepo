@@ -526,6 +526,8 @@ await this.prisma.$transaction(
 
 ### Exercise
 
+> **Status:** read; exercise skipped (2026-11-11). The checker stays behind `describe.skip`. Lessons 5.4 to 5.6 were skipped; the "Other ways to enforce the same rule" table above summarizes row locks and counters.
+
 The checker is `apps/api/test/wip-limit.e2e-spec.ts`: 3 moves succeed and the 4th gets `409 CONFLICT`; moving one out frees a slot; a task already in progress does not count against itself; and five rounds of 6 concurrent moves must end with exactly `[200, 200, 200, 409, 409, 409]` and 3 in progress.
 
 1. **The naive rule, no transaction.** In `TasksService.update`, when `input.status === 'in_progress'`: load the task (you need its `projectId` and current status). If it is not already in progress, count the project's in-progress tasks. At 3 or more, throw `ConflictException('Project already has 3 tasks in progress')`. Then update as before. Add `TasksRepository.countByStatus`. Run the checker: the two sequential tests pass, and the concurrent one returns six `200`s.
