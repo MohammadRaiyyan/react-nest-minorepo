@@ -378,6 +378,168 @@ One statement: the arithmetic happens in Postgres, and `RETURNING` hands back th
 - **The type keeps the unsafe path closed.** `'lastTaskNumber'` was removed from `ProjectsRepository.update`'s `changes` type once the atomic method existed, so nobody can write a counter value computed in JavaScript.
 - **Ownership:** the counter belongs to Projects, so `ProjectsService.nextTaskNumber` hands Tasks a ready number. Tasks never sees how it was produced.
 
+## Lesson 5.3: Isolation levels
+
+### The feature: a WIP limit
+
+Kanban boards limit work in progress: at most **3 tasks `in_progress` per project**. Moving a 4th task to `in_progress` gets `409`. Moving one to `done` frees a slot.
+
+```ts
+// PATCH /tasks/:id  { status: 'in_progress' }
+const inProgress = await count(projectId, 'in_progress');   // read many rows
+if (inProgress >= 3) throw new ConflictException(…);
+await update(taskId, { status: 'in_progress' });            // write one row
+```
+
+### Why the tools from 5.1 and 5.2 do not work here
+
+| Tool | Why it does not fit |
+| --- | --- |
+| `UNIQUE` constraint (5.1) | It can say "no two rows share a value". It cannot say "at most 3 rows have this value". |
+| Atomic update (5.2) | It protects one row that is read and written. Here the request **reads many rows** (the count) and **writes a different row** (its own task). |
+
+Two requests at once, with 2 tasks already in progress:
+
+```
+Request A (task X)                 Request B (task Y)
+count in_progress → 2
+                                   count in_progress → 2
+2 < 3 ✓  X → in_progress
+                                   2 < 3 ✓  Y → in_progress
+                                                              → 4 in progress
+```
+
+A and B never touch the same row, so there is no row lock to wait on, and nothing collides. Each made a correct decision based on what it read; together they broke the rule. This is called **write skew**: two transactions read an overlapping set of rows, then each writes something the other one's check depended on.
+
+### What isolation means
+
+When transactions run at the same time, **isolation** decides what each one can see of the others' work. Postgres offers three levels (a fourth, Read Uncommitted, behaves like Read Committed in Postgres):
+
+```
+Read Committed (default)     each STATEMENT sees a fresh snapshot of committed data
+Repeatable Read              the whole TRANSACTION sees one snapshot, taken at its first query
+Serializable                 Repeatable Read + Postgres watches for read/write patterns
+                             that no one-at-a-time order could produce, and aborts one
+```
+
+A **snapshot** is a frozen view of the database as of one moment: rows committed after that moment are invisible.
+
+What each level allows:
+
+| Anomaly | What happens | Read Committed | Repeatable Read | Serializable |
+| --- | --- | --- | --- | --- |
+| Dirty read | See another transaction's uncommitted change | never | never | never |
+| Non-repeatable read | The same `SELECT` twice in one transaction returns different values | ✗ happens | prevented | prevented |
+| Phantom | The same query twice returns new rows | ✗ happens | prevented (in Postgres) | prevented |
+| Lost update (read-modify-write, same row) | 5.2 | ✗ happens | aborts with `40001` | aborts with `40001` |
+| **Write skew** (read many, write a different row) | the WIP limit | ✗ happens | **✗ happens** | aborts with `40001` |
+
+Repeatable Read is not enough for the WIP limit. Its snapshot keeps each transaction's view *consistent*, but both transactions consistently see "2 in progress", so both still proceed.
+
+### Measured: 6 tasks moved to `in_progress` at once, limit 3, 5 rounds
+
+Measured with a script that runs the check and the update inside one Prisma transaction at each level:
+
+| Level | Moves that succeeded | In progress at the end of each round |
+| --- | --- | --- |
+| Read Committed | 30 of 30 | 6, 6, 6, 6, 6 |
+| Repeatable Read | 30 of 30 | 6, 6, 6, 6, 6 |
+| Serializable, no retry | 5 of 30, the other 25 failed with `40001` | 1, 1, 1, 1, 1 |
+| Serializable + retry (5 attempts) | 15 moved, 15 got "limit reached" | 3, 3, 3, 3, 3 |
+
+With 20 concurrent moves per round instead of 6, Serializable + retry still ended every round at exactly 3, and no request needed more than 3 attempts.
+
+### Serializable does not wait. It aborts, and you retry.
+
+Row locks (5.2) make the second writer **wait**. Serializable does something different: it lets both transactions run, tracks what each one read and wrote, and when it sees a pattern that could not happen if they had run one after the other, it **aborts** one of them with SQLSTATE `40001` (`serialization_failure`).
+
+```
+Request A                          Request B
+BEGIN SERIALIZABLE                 BEGIN SERIALIZABLE
+count → 2                          count → 2
+X → in_progress                    Y → in_progress
+COMMIT ✅                          COMMIT ❌ 40001 "could not serialize access"
+                                   ── retry from the start ──
+                                   BEGIN SERIALIZABLE
+                                   count → 3
+                                   3 >= 3 → 409 (limit reached)
+```
+
+The retry is not optional: it is how Serializable is meant to be used. Without it, the "no retry" row above is what users get: most of them see a `500` for an ordinary action.
+
+Retry rules:
+
+1. **Rerun the whole transaction**, from `BEGIN`. The failed one is dead. You cannot retry one statement inside it.
+2. **Retry only `40001`.** A `ConflictException` ("limit reached") is a real answer, not a failure, so pass it through.
+3. **Cap the attempts** (5 is common), with a small random wait between them (5 to 25 ms), so the same requests do not collide again in lockstep.
+4. **No side effects inside the transaction.** Because it may run several times, sending an email or calling another service from inside it would happen several times. Do those after it commits (Chapter 12, outbox).
+
+### How the failure reaches you in Prisma 7
+
+The same `40001` arrives in two shapes, depending on where Postgres detects the conflict. Both were observed in the measurement above:
+
+| Shape | How to recognize it |
+| --- | --- |
+| `Prisma.PrismaClientKnownRequestError` | `code === 'P2034'` |
+| A raw driver adapter error, not wrapped by Prisma | `error.cause.originalCode === '40001'` (`cause.kind === 'TransactionWriteConflict'`) |
+
+This is a library detail, not a concept, so here is the predicate for `common/prisma-errors.ts`:
+
+```ts
+export function isSerializationFailure(e: unknown): boolean {
+  if (e instanceof Prisma.PrismaClientKnownRequestError) return e.code === 'P2034';
+  const cause = (e as { cause?: { originalCode?: string } } | null)?.cause;
+  return cause?.originalCode === '40001';
+}
+```
+
+### Prisma APIs for this lesson
+
+```ts
+import { Prisma, PrismaClient } from '@teamboard/db';
+
+await this.prisma.$transaction(
+  async (tx) => {
+    // use tx for every query in here (Lesson 4.7): this.prisma would run
+    // outside the transaction, on another connection
+  },
+  { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+);
+```
+
+- Throwing inside the callback rolls the transaction back, and the error comes out of `$transaction` unchanged.
+- Repository methods take the client as an optional last parameter, so the same method works inside and outside a transaction:
+  ```ts
+  async countByStatus(projectId: string, status: TaskStatus, db: Prisma.TransactionClient = this.prisma) {
+    return await db.task.count({ where: { projectId, status } });
+  }
+  ```
+- `TasksService` injects the client to start transactions: `@Inject(PRISMA) private readonly prisma: PrismaClient`.
+
+### Other ways to enforce the same rule
+
+| Approach | How | Trade-off |
+| --- | --- | --- |
+| **Serializable + retry** (this lesson) | Postgres detects the conflict | No extra schema. Retries cost work under heavy contention. Every transaction that must respect the rule has to run at Serializable. |
+| **Lock the parent row** (5.4) | `SELECT … FROM projects WHERE id = $1 FOR UPDATE` first, then count | Moves in one project wait in line instead of aborting. Simple, but you must remember to take the lock in every code path. |
+| **Counter column** (5.2) | `UPDATE projects SET in_progress = in_progress + 1 WHERE id = $1 AND in_progress < 3` | One atomic statement. The counter must be kept in sync on every status change and delete. |
+
+### Exercise
+
+The checker is `apps/api/test/wip-limit.e2e-spec.ts`: 3 moves succeed and the 4th gets `409 CONFLICT`; moving one out frees a slot; a task already in progress does not count against itself; and five rounds of 6 concurrent moves must end with exactly `[200, 200, 200, 409, 409, 409]` and 3 in progress.
+
+1. **The naive rule, no transaction.** In `TasksService.update`, when `input.status === 'in_progress'`: load the task (you need its `projectId` and current status). If it is not already in progress, count the project's in-progress tasks. At 3 or more, throw `ConflictException('Project already has 3 tasks in progress')`. Then update as before. Add `TasksRepository.countByStatus`. Run the checker: the two sequential tests pass, and the concurrent one returns six `200`s.
+2. **Serializable, no retry.** Give the repository methods you use an optional `db` parameter. Inject the Prisma client into `TasksService`, and run load + count + update inside `$transaction` with `isolationLevel: Serializable`. Run the checker and read the statuses and the API log.
+3. **Add the retry.** Add `isSerializationFailure` (above) to `common/prisma-errors.ts`. Write a small helper, for example `common/serializable.ts`: `runSerializable(prisma, fn, maxAttempts = 5)`, which runs the transaction, and on a serialization failure waits 5 to 25 ms at random and tries again, up to the cap. Every other error is rethrown at once. Use it in `update`. Your existing P2025 → 404 handling stays around the whole call. The checker passes.
+4. **Break it.** Change the level to `RepeatableRead` and run the checker. Predict the result first, using the anomaly table. Change it back.
+
+**Check**
+
+```sh
+pnpm lint && pnpm typecheck
+pnpm --filter @teamboard/api test:e2e      # 15 passed, 6 skipped
+```
+
 ## My notes
 
 _Write in your own words: why a check in application code cannot replace a constraint in the database._

@@ -143,6 +143,7 @@ Teamboard live on a managed platform: SPA, API, and worker deployed from GitHub 
   - [x] 5.1 One thread, many requests: where interleaving happens
   - [x] 5.2 Lost updates and atomic updates
   - [ ] 5.3 Isolation levels ← **resume here**
+    - _Paused 2026-11-10._ Concept taught in chat and written in the chapter file. Exercise not started: next is **step 1** (naive WIP-limit rule in `TasksService.update`). Checker `apps/api/test/wip-limit.e2e-spec.ts` fails as expected (6 × 200 in the concurrent round).
   - [ ] 5.4 Pessimistic locking (`SELECT … FOR UPDATE`)
   - [ ] 5.5 Optimistic locking (version columns)
   - [ ] 5.6 Distributed locks in Redis
